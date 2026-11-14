@@ -167,6 +167,26 @@ function R.context(db, charKey)
     return ctx
 end
 
+-- Tooltip advice text is at most this long.
+local MAX_NOTE = 48
+R.MAX_NOTE = MAX_NOTE
+
+-- Add the first hint that still fits in the tooltip, or none.
+local function fitHint(text, ...)
+    for i = 1, select("#", ...) do
+        local hint = select(i, ...)
+        if #text + #hint <= MAX_NOTE then return text .. hint end
+    end
+    return text
+end
+
+-- Last resort for text that is still too long: cut at a word boundary.
+local function fitNote(text)
+    if type(text) ~= "string" or #text <= MAX_NOTE then return text end
+    local cut = text:sub(1, MAX_NOTE - 3):match("^(.*%S)%s") or text:sub(1, MAX_NOTE - 3)
+    return (cut:gsub("[%s%p]+$", "")) .. "..."
+end
+
 -- Sell to a vendor or list on the auction house, for something the character has no use for.
 local function dispose(ctx, item, why)
     local vendor = tonumber(item.sellPriceEach) or 0
@@ -184,7 +204,7 @@ local function dispose(ctx, item, why)
     end
     if vendor <= 0 then return nil end
     if (tonumber(item.quality) or 0) >= 2 then
-        return "auction", why .. " Check the price first."
+        return "auction", fitHint(why, " Check the price first.", " Check price.")
     end
     return "sell", why
 end
@@ -415,7 +435,7 @@ function R.adviseAll(db, charKey)
             for _, it in ipairs(list(type(b) == "table" and b.items)) do
                 if type(it) == "table" and it.name and not out[it.name] then
                     local ok, a, n, rule = pcall(R.advise, ctx, it)
-                    if ok and a then out[it.name] = { a, n, rule } end
+                    if ok and a then out[it.name] = { a, fitNote(n), rule } end
                 end
             end
         end

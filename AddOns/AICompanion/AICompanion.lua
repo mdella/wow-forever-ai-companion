@@ -4,7 +4,7 @@
 -- It never automates gameplay: it only reads data the game already shows you.
 
 local ADDON_NAME = ...
-local VERSION = "0.8.0"
+local VERSION = "0.8.1"
 local PREFIX = "|cff66ccffAI Companion|r: "
 
 local DB            -- AICompanionDB once loaded
@@ -1458,6 +1458,13 @@ function handlers.ADDON_LOADED(name)
     DB.tooltipHook = okHook and "ok" or ("failed: " .. tostring(hookErr))
 end
 
+-- Defined before PLAYER_LOGIN, whose periodic ticker calls it.
+local function snapshotNow(reason)
+    if not DB or not charKey then return end
+    if InCombatLockdown and InCombatLockdown() then return end
+    takeSnapshot(reason)
+end
+
 function handlers.PLAYER_LOGIN()
     if not DB then return end
     local name = UnitName("player") or "Unknown"
@@ -1479,12 +1486,6 @@ end
 function handlers.PLAYER_LOGOUT()
     -- Deliberately no snapshot here: character data is already unloading on a real logout.
     if DB then DB.lastLogoutText = date("%Y-%m-%d %H:%M:%S") end
-end
-
-local function snapshotNow(reason)
-    if not DB or not charKey then return end
-    if InCombatLockdown and InCombatLockdown() then return end
-    takeSnapshot(reason)
 end
 
 -- Fired when the logout or exit countdown starts, and when leaving the world.

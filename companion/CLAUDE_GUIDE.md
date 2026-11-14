@@ -143,5 +143,6 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 ## Changelog
 
+- 0.8.1 — The two-minute background snapshot now runs (it never did). Rule advice always fits the 48-character tooltip limit.
 - 0.8.0 — Built-in rules give item advice without an assistant. Tooltip text limited to one short line (`tip`).
 - 0.7.0 — Personal data moved to the separate `AICompanion_Data` add-on. Item advice in tooltips with immediate actions. Auction price check.
