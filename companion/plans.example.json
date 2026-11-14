@@ -1,0 +1,37 @@
+{
+ "roster": ["Firstname Lastname"],
+ "sources": {
+  "example": { "label": "Site name: page title", "url": "https://example.com/wow-forever/page" },
+  "oldgame": { "label": "Site name: page title", "url": "https://example.com/classic/page", "scope": "classic" }
+ },
+ "characters": {
+  "Firstname": {
+   "headline": "One or two sentences: where this character stands and the single most useful thing to do next.",
+   "next": [
+    { "id": "f-bags", "title": "Free up bag space before leaving town", "detail": "Sell the items marked Sell to vendor.", "tag": "game", "done": { "freeSlots": 10 } },
+    { "id": "f-eat", "title": "Eat before the fight", "detail": "A step the snapshot cannot detect gets no done rule, so the page shows a tick box.", "tag": "judgment" }
+   ],
+   "questing": [
+    { "title": "Name of a questing stretch", "note": "Why this order.", "steps": [
+      { "id": "f-q1", "title": "Quest name", "detail": "Where to go and what to do.", "tag": "lookup", "source": "example", "done": { "questDone": "Quest name" } }
+    ] }
+   ],
+   "professions": {
+    "Cooking": { "status": "86 of 150.", "next": "The concrete next recipe, who sells or teaches it, and where.", "tag": "classic", "source": "oldgame" }
+   },
+   "gear": [
+    { "id": "f-g1", "title": "Ranged: buy a named item", "detail": "Its stats, level requirement and where it comes from.", "tag": "lookup", "source": "example", "done": { "equipped": "Named Item" } }
+   ],
+   "talents": { "note": "Where the points are now.", "suggestion": "Where the next points go and why.", "tag": "judgment" },
+   "bags": "One line on bag space.",
+   "blindspots": [
+    { "text": "Open your Cooking window once so I can see your recipes.", "done": { "captured": "recipes:Cooking" } }
+   ],
+   "items": {
+    "Hearthstone": { "action": "carry", "tip": "Set to Goldshire.", "note": "Set to Goldshire." },
+    "Light Leather": { "action": "bank", "tip": "For Leatherworking 55+.", "note": "For Embossed Leather Gloves at Leatherworking 55. Not needed in the bags yet." }
+   },
+   "shopping": ["Lesser Magic Wand", "Linen Bag"]
+  }
+ }
+}

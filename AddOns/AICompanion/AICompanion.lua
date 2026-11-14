@@ -1,0 +1,1529 @@
+-- AI Companion for World of Warcraft: Forever
+-- Saves a read-only snapshot of the character to SavedVariables (written to disk
+-- on /reload or logout) so an out-of-game AI companion can read it.
+-- It never automates gameplay: it only reads data the game already shows you.
+
+local ADDON_NAME = ...
+local VERSION = "0.8.0"
+local PREFIX = "|cff66ccffAI Companion|r: "
+
+local DB            -- AICompanionDB once loaded
+local charKey       -- "Name@Realm"
+local lastSnapshotAt = 0
+local dirty, pending = false, false
+
+-------------------------------------------------------------------------------
+-- Helpers
+-------------------------------------------------------------------------------
+
+local issecret = (type(issecretvalue) == "function") and issecretvalue or nil
+
+local function isSecret(v)
+    return issecret ~= nil and issecret(v) == true
+end
+
+-- Call a function that may not exist or may error; return its results or nil.
+local function try(fn, ...)
+    if type(fn) ~= "function" then return nil end
+    return (function(ok, ...)
+        if ok then return ... end
+        return nil
+    end)(pcall(fn, ...))
+end
+
+-- Keep only plain data that SavedVariables can hold.
+local function clean(v, depth)
+    depth = depth or 0
+    if isSecret(v) then return "<hidden>" end
+    local t = type(v)
+    if t == "string" or t == "number" or t == "boolean" then return v end
+    if t == "table" and depth < 7 then
+        local out = {}
+        for k, val in pairs(v) do
+            if not isSecret(k) then
+                local kt = type(k)
+                if kt == "string" or kt == "number" then
+                    local c = clean(val, depth + 1)
+                    if c ~= nil then out[k] = c end
+                end
+            end
+        end
+        return out
+    end
+    return nil
+end
+
+local function pack(...)
+    local t = {}
+    for i = 1, select("#", ...) do t[i] = (select(i, ...)) end
+    return t
+end
+
+local function strip(text)
+    if type(text) ~= "string" then return text end
+    text = text:gsub("|c%x%x%x%x%x%x%x%x", "")
+    text = text:gsub("|cn[^:]+:", "")
+    text = text:gsub("|r", "")
+    text = text:gsub("|T.-|t", "")
+    text = text:gsub("|A.-|a", "")
+    text = text:gsub("|n", " ")
+    return text
+end
+
+local function money(copper)
+    if type(copper) ~= "number" then return "?" end
+    local g = math.floor(copper / 10000)
+    local s = math.floor((copper % 10000) / 100)
+    local c = copper % 100
+    local parts = {}
+    if g > 0 then parts[#parts + 1] = g .. "g" end
+    if s > 0 or g > 0 then parts[#parts + 1] = s .. "s" end
+    parts[#parts + 1] = c .. "c"
+    return table.concat(parts, " ")
+end
+
+local QUALITY = { [0] = "Poor", [1] = "Common", [2] = "Uncommon", [3] = "Rare", [4] = "Epic", [5] = "Legendary" }
+
+local function tipLines(data)
+    if type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
+    local out = {}
+    for _, line in ipairs(data.lines) do
+        if type(line) == "table" then
+            local l, r = line.leftText, line.rightText
+            if isSecret(l) or isSecret(r) then
+                out[#out + 1] = "<hidden>"
+            elseif type(l) == "string" and l ~= "" then
+                l = strip(l)
+                if type(r) == "string" and r ~= "" then
+                    out[#out + 1] = l .. "  |  " .. strip(r)
+                else
+                    out[#out + 1] = l
+                end
+            end
+        end
+    end
+    return out
+end
+
+local function itemRecord(link, count, tooltip)
+    local rec = { link = link, count = count, tooltip = tooltip }
+    if type(link) == "string" then
+        rec.itemID = tonumber(link:match("item:(%d+)"))
+        local getInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+        local name, _, quality, itemLevel, minLevel, itemType, itemSubType, maxStack,
+              equipLoc, _, sellPrice = try(getInfo, link)
+        rec.name = name or link:match("%[(.-)%]")
+        rec.quality = quality
+        rec.qualityName = quality and QUALITY[quality] or nil
+        rec.itemLevel = itemLevel
+        rec.requiredLevel = minLevel
+        rec.type = itemType
+        rec.subType = itemSubType
+        rec.maxStack = maxStack
+        rec.equipSlot = (equipLoc ~= "" and equipLoc) or nil
+        rec.sellPriceEach = sellPrice
+        rec.sellPriceEachText = sellPrice and money(sellPrice) or nil
+    end
+    return rec
+end
+
+-------------------------------------------------------------------------------
+-- Snapshot sections
+-------------------------------------------------------------------------------
+
+local function scanCharacter()
+    local c = {}
+    c.name = UnitName("player")
+    c.realm = try(GetRealmName)
+    c.fullName = pack(try(UnitFullName, "player"))
+    c.lastName = c.fullName[2]
+    local className, classFile = UnitClass("player")
+    c.class, c.classFile = className, classFile
+    local raceName, raceFile = UnitRace("player")
+    c.race, c.raceFile = raceName, raceFile
+    c.faction = (try(UnitFactionGroup, "player"))
+    c.sex = try(UnitSex, "player")
+    c.gender = (c.sex == 2 and "Male") or (c.sex == 3 and "Female") or nil
+    c.level = UnitLevel("player")
+    c.xp = try(UnitXP, "player")
+    c.xpMax = try(UnitXPMax, "player")
+    c.restedXP = try(GetXPExhaustion)
+    c.isResting = try(IsResting)
+    c.money = try(GetMoney)
+    c.moneyText = money(c.money)
+    c.guild = pack(try(GetGuildInfo, "player"))
+    c.healthMax = try(UnitHealthMax, "player")
+    c.powerType = pack(try(UnitPowerType, "player"))
+    c.powerMax = try(UnitPowerMax, "player")
+    c.armor = pack(try(UnitArmor, "player"))
+    c.stats = {}
+    local statNames = { "Strength", "Agility", "Stamina", "Intellect", "Spirit" }
+    for i = 1, 5 do
+        local base, stat, pos, neg = try(UnitStat, "player", i)
+        if base ~= nil then
+            c.stats[statNames[i]] = { base = base, total = stat, bonus = pos, penalty = neg }
+        end
+    end
+    c.attackPower = pack(try(UnitAttackPower, "player"))
+    c.rangedAttackPower = pack(try(UnitRangedAttackPower, "player"))
+    c.critChance = try(GetCritChance)
+    c.dodgeChance = try(GetDodgeChance)
+    c.unspentTalentPoints = pack(try(UnitCharacterPoints, "player"))
+    c.isDead = try(UnitIsDeadOrGhost, "player")
+    if try(UnitExists, "pet") then
+        c.pet = {
+            name = UnitName("pet"),
+            level = try(UnitLevel, "pet"),
+            family = try(UnitCreatureFamily, "pet"),
+            happiness = pack(try(GetPetHappiness)),
+        }
+    end
+    return c
+end
+
+local function scanLocation()
+    local loc = {}
+    loc.zone = try(GetRealZoneText)
+    loc.zoneText = try(GetZoneText)
+    loc.subZone = try(GetSubZoneText)
+    loc.minimapZone = try(GetMinimapZoneText)
+    loc.hearthstone = try(GetBindLocation)
+    loc.instance = pack(try(GetInstanceInfo))
+    if C_Map and C_Map.GetBestMapForUnit then
+        local mapID = try(C_Map.GetBestMapForUnit, "player")
+        loc.mapID = mapID
+        if mapID then
+            local info = try(C_Map.GetMapInfo, mapID)
+            if type(info) == "table" then
+                loc.mapName = info.name
+                loc.parentMapID = info.parentMapID
+            end
+            local pos = try(C_Map.GetPlayerMapPosition, mapID, "player")
+            if pos and pos.GetXY then
+                local x, y = pos:GetXY()
+                if type(x) == "number" and type(y) == "number" then
+                    loc.x = math.floor(x * 1000 + 0.5) / 10
+                    loc.y = math.floor(y * 1000 + 0.5) / 10
+                end
+            end
+        end
+    end
+    return loc
+end
+
+local SLOT_NAMES = {
+    [0] = "Ammo", "Head", "Neck", "Shoulder", "Shirt", "Chest", "Waist", "Legs", "Feet", "Wrist",
+    "Hands", "Finger1", "Finger2", "Trinket1", "Trinket2", "Back", "MainHand", "OffHand", "Ranged", "Tabard",
+}
+
+local function scanEquipment()
+    local eq = {}
+    for slot = 0, 19 do
+        local link = try(GetInventoryItemLink, "player", slot)
+        if link then
+            local tip = C_TooltipInfo and tipLines(try(C_TooltipInfo.GetInventoryItem, "player", slot)) or nil
+            local rec = itemRecord(link, try(GetInventoryItemCount, "player", slot), tip)
+            rec.slot = slot
+            rec.slotName = SLOT_NAMES[slot]
+            local cur, max = try(GetInventoryItemDurability, slot)
+            rec.durability, rec.durabilityMax = cur, max
+            eq[#eq + 1] = rec
+        end
+    end
+    return eq
+end
+
+local function scanBagRange(first, last)
+    local bags = {}
+    if not (C_Container and C_Container.GetContainerNumSlots) then
+        error("C_Container is not available in this client")
+    end
+    for bag = first, last do
+        local n = try(C_Container.GetContainerNumSlots, bag) or 0
+        if type(n) == "number" and n > 0 then
+            local b = { bag = bag, slots = n, items = {} }
+            b.free = (try(C_Container.GetContainerNumFreeSlots, bag))
+            b.name = try(C_Container.GetBagName, bag)
+            for slot = 1, n do
+                local info = try(C_Container.GetContainerItemInfo, bag, slot)
+                if type(info) == "table" then
+                    local tip = C_TooltipInfo and tipLines(try(C_TooltipInfo.GetBagItem, bag, slot)) or nil
+                    local rec = itemRecord(info.hyperlink, info.stackCount, tip)
+                    rec.slot = slot
+                    rec.itemID = rec.itemID or info.itemID
+                    rec.name = rec.name or info.itemName
+                    rec.bound = info.isBound
+                    rec.noVendorValue = info.hasNoValue
+                    rec.quality = rec.quality or info.quality
+                    b.items[#b.items + 1] = rec
+                end
+            end
+            bags[#bags + 1] = b
+        end
+    end
+    return bags
+end
+
+local function lastPlayerBag()
+    return (type(NUM_TOTAL_EQUIPPED_BAG_SLOTS) == "number" and NUM_TOTAL_EQUIPPED_BAG_SLOTS) or 5
+end
+
+local function scanBags()
+    return scanBagRange(0, lastPlayerBag())
+end
+
+local function scanBank()
+    local out = scanBagRange(-3, -1)
+    local start = lastPlayerBag() + 1
+    for _, b in ipairs(scanBagRange(start, start + 20)) do out[#out + 1] = b end
+    return out
+end
+
+local function scanQuests()
+    if not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries) then
+        error("C_QuestLog is not available in this client")
+    end
+    local out = {}
+    local n = C_QuestLog.GetNumQuestLogEntries() or 0
+    local header
+    for i = 1, n do
+        local info = try(C_QuestLog.GetInfo, i)
+        if type(info) == "table" then
+            if info.isHeader then
+                header = info.title
+            elseif not info.isHidden then
+                local qid = info.questID
+                local q = {
+                    logIndex = i,
+                    title = info.title,
+                    questID = qid,
+                    level = info.level,
+                    difficultyLevel = info.difficultyLevel,
+                    suggestedGroup = info.suggestedGroup,
+                    frequency = info.frequency,
+                    category = header,
+                    isTask = info.isTask,
+                    isOnMap = info.isOnMap,
+                }
+                q.complete = try(C_QuestLog.IsComplete, qid)
+                q.failed = try(C_QuestLog.IsFailed, qid)
+                q.readyForTurnIn = try(C_QuestLog.ReadyForTurnIn, qid)
+                q.objectives = try(C_QuestLog.GetQuestObjectives, qid)
+                q.tag = try(C_QuestLog.GetQuestTagInfo, qid)
+                local desc, obj = try(GetQuestLogQuestText, i)
+                q.description, q.objectiveText = desc, obj
+                q.rewardMoney = try(GetQuestLogRewardMoney, qid)
+                q.rewardXP = try(GetQuestLogRewardXP, qid)
+                local nr = try(GetNumQuestLogRewards, qid)
+                if type(nr) == "number" and nr > 0 then
+                    q.rewardItems = {}
+                    for r = 1, nr do q.rewardItems[r] = pack(try(GetQuestLogRewardInfo, r, qid)) end
+                end
+                local nc = try(GetNumQuestLogChoices, qid)
+                if type(nc) == "number" and nc > 0 then
+                    q.rewardChoices = {}
+                    for r = 1, nc do q.rewardChoices[r] = pack(try(GetQuestLogChoiceInfo, r, qid)) end
+                end
+                out[#out + 1] = q
+            end
+        end
+    end
+    return out
+end
+
+-- Every quest this character has ever completed. Titles load in the background,
+-- so a first snapshot may hold IDs whose titles arrive in the next one.
+local titleRequested = {}
+local function scanCompletedQuests()
+    if not (C_QuestLog and C_QuestLog.GetAllCompletedQuestIDs) then
+        error("completed-quest list is not available in this client")
+    end
+    local ids = C_QuestLog.GetAllCompletedQuestIDs()
+    if type(ids) ~= "table" then error("completed-quest list returned nothing") end
+    DB.questTitles = DB.questTitles or {}
+    local out = { count = #ids, untitled = 0, quests = {} }
+    for _, id in ipairs(ids) do
+        local title = DB.questTitles[id]
+        if not title then
+            title = try(C_QuestLog.GetTitleForQuestID, id)
+            if type(title) == "string" and title ~= "" and not isSecret(title) then
+                DB.questTitles[id] = title
+            else
+                title = nil
+                out.untitled = out.untitled + 1
+                if not titleRequested[id] then
+                    titleRequested[id] = true
+                    try(C_QuestLog.RequestLoadQuestByID, id)
+                end
+            end
+        end
+        out.quests[#out.quests + 1] = { id = id, title = title }
+    end
+    return out
+end
+
+local function scanSkills()
+    local out = { skillLines = {}, professions = {} }
+    -- Classic-style skill list (professions, weapon skills, languages)
+    local n = try(GetNumSkillLines)
+    if type(n) == "number" then
+        local header
+        for i = 1, n do
+            local r = pack(try(GetSkillLineInfo, i))
+            if r[1] then
+                if r[2] then
+                    header = r[1]
+                else
+                    out.skillLines[#out.skillLines + 1] = {
+                        name = r[1], category = header, rank = r[4], tempBonus = r[5],
+                        modifier = r[6], max = r[7],
+                    }
+                end
+            end
+        end
+    end
+    -- Modern-style profession list
+    local profs = pack(try(GetProfessions))
+    for i = 1, 6 do
+        local idx = profs[i]
+        if idx then
+            local r = pack(try(GetProfessionInfo, idx))
+            if r[1] then
+                out.professions[#out.professions + 1] = { name = r[1], rank = r[3], max = r[4], skillLine = r[7], raw = r }
+            end
+        end
+    end
+    return out
+end
+
+local function scanSpells()
+    local out = {}
+    if not (C_SpellBook and C_SpellBook.GetNumSpellBookSkillLines) then
+        error("C_SpellBook is not available in this client")
+    end
+    local bank = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
+    local lines = C_SpellBook.GetNumSpellBookSkillLines() or 0
+    for i = 1, lines do
+        local line = try(C_SpellBook.GetSpellBookSkillLineInfo, i)
+        if type(line) == "table" then
+            local tab = { name = line.name, spells = {} }
+            local offset, count = line.itemIndexOffset or 0, line.numSpellBookItems or 0
+            for s = offset + 1, offset + count do
+                local info = try(C_SpellBook.GetSpellBookItemInfo, s, bank)
+                if type(info) == "table" and info.name then
+                    tab.spells[#tab.spells + 1] = {
+                        name = info.name, rank = info.subName, spellID = info.spellID,
+                        passive = info.isPassive, offSpec = info.isOffSpec,
+                    }
+                end
+            end
+            out[#out + 1] = tab
+        end
+    end
+    return out
+end
+
+local function spellName(spellID)
+    if not spellID then return nil end
+    return (C_Spell and try(C_Spell.GetSpellName, spellID)) or nil
+end
+
+-- Reads one tree of the trait system (class talents and Legacy trees both use it).
+local function scanTraitTree(configID, treeID)
+    local tree = { treeID = treeID, configID = configID, nodes = {} }
+    tree.groupDisplay = try(C_Traits.GetGroupDisplayInfoByTreeID, treeID)
+    tree.currencies = try(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
+    local nodeIDs = try(C_Traits.GetTreeNodes, treeID)
+    if type(nodeIDs) ~= "table" then
+        tree.note = "no nodes returned"
+        return tree
+    end
+    for _, nodeID in ipairs(nodeIDs) do
+        local n = try(C_Traits.GetNodeInfo, configID, nodeID)
+        if type(n) == "table" and n.ID and n.ID ~= 0 and n.isVisible ~= false then
+            local rec = {
+                nodeID = nodeID,
+                rank = n.currentRank or n.ranksPurchased,
+                activeRank = n.activeRank,
+                maxRank = n.maxRanks,
+                groupIDs = n.groupIDs,
+                posX = n.posX, posY = n.posY,
+                available = n.isAvailable,
+                canPurchase = n.canPurchaseRank,
+                meetsEdgeRequirements = n.meetsEdgeRequirements,
+            }
+            local entryID = (type(n.activeEntry) == "table" and n.activeEntry.entryID)
+                or (type(n.entryIDs) == "table" and n.entryIDs[1])
+            if entryID then
+                local e = try(C_Traits.GetEntryInfo, configID, entryID)
+                if type(e) == "table" and e.definitionID then
+                    local d = try(C_Traits.GetDefinitionInfo, e.definitionID)
+                    if type(d) == "table" then
+                        rec.spellID = d.spellID or d.overriddenSpellID
+                        rec.name = d.overrideName or spellName(rec.spellID)
+                        rec.description = d.overrideDescription
+                            or (rec.spellID and C_Spell and strip(try(C_Spell.GetSpellDescription, rec.spellID)))
+                    end
+                end
+            end
+            tree.nodes[#tree.nodes + 1] = rec
+        end
+    end
+    return tree
+end
+
+local function scanTalents()
+    if not C_Traits then error("C_Traits is not available in this client") end
+    local out = { trees = {} }
+    local configID, source
+    if C_SpecializationInfo then
+        local group = try(C_SpecializationInfo.GetActiveSpecGroup) or 1
+        out.activeSpecGroup = group
+        configID = try(C_SpecializationInfo.GetCombatConfigIDForSpecGroup, group)
+        if configID then source = "C_SpecializationInfo.GetCombatConfigIDForSpecGroup" end
+    end
+    if not configID and C_ClassTalents then
+        configID = try(C_ClassTalents.GetActiveConfigID)
+        if configID then source = "C_ClassTalents.GetActiveConfigID" end
+    end
+    out.configID, out.configSource = configID, source
+    if not configID then
+        out.note = "no talent config found (talents may not be unlocked yet)"
+        return out
+    end
+    local cfg = try(C_Traits.GetConfigInfo, configID)
+    if type(cfg) ~= "table" then
+        out.note = "talent config could not be read"
+        return out
+    end
+    out.configName, out.configType = cfg.name, cfg.type
+    for _, treeID in ipairs(cfg.treeIDs or {}) do
+        out.trees[#out.trees + 1] = scanTraitTree(configID, treeID)
+    end
+    return out
+end
+
+-- Legacy trees. The tree and currency numbers are best-effort values reported by other add-on authors.
+local LEGACY_TREES = { { 1187, "Professions" }, { 1188, "Adventure" }, { 1189, "Progression" } }
+local LEGACY_CURRENCY_ID = 4225
+
+local function scanLegacy()
+    local out = { trees = {} }
+    if C_CurrencyInfo and C_CurrencyInfo.GetCurrencyInfo then
+        out.pointsCurrency = try(C_CurrencyInfo.GetCurrencyInfo, LEGACY_CURRENCY_ID)
+    end
+    if not C_Traits then return out end
+    for _, t in ipairs(LEGACY_TREES) do
+        local treeID, label = t[1], t[2]
+        local configID = try(C_Traits.GetConfigIDByTreeID, treeID)
+        if configID then
+            local tree = scanTraitTree(configID, treeID)
+            tree.label = label
+            out.trees[#out.trees + 1] = tree
+        else
+            out.trees[#out.trees + 1] = { treeID = treeID, label = label, note = "no config for this tree (not unlocked, or the ID is wrong)" }
+        end
+    end
+    return out
+end
+
+local function scanCurrencies()
+    local out = {}
+    if not (C_CurrencyInfo and C_CurrencyInfo.GetCurrencyListSize) then return out end
+    local n = try(C_CurrencyInfo.GetCurrencyListSize) or 0
+    for i = 1, math.min(n, 200) do
+        local c = try(C_CurrencyInfo.GetCurrencyListInfo, i)
+        if type(c) == "table" and c.name then
+            out[#out + 1] = {
+                name = c.name, isHeader = c.isHeader, quantity = c.quantity,
+                max = c.maxQuantity, currencyID = c.currencyID,
+            }
+        end
+    end
+    return out
+end
+
+-- Legacy challenges, if the game exposes them through the achievement interface.
+local function scanChallenges()
+    local out = { categories = {} }
+    out.totalPoints = try(GetTotalAchievementPoints)
+    local cats = try(GetCategoryList)
+    if type(cats) ~= "table" then
+        out.note = "achievement-style interface not found"
+        return out
+    end
+    local total = 0
+    for _, catID in ipairs(cats) do
+        local name, parent = try(GetCategoryInfo, catID)
+        local n = try(GetCategoryNumAchievements, catID) or 0
+        local cat = { id = catID, name = name, parent = parent, entries = {} }
+        for i = 1, n do
+            if total >= 400 then break end
+            local r = pack(try(GetAchievementInfo, catID, i))
+            if r[2] then
+                cat.entries[#cat.entries + 1] = { id = r[1], name = r[2], points = r[3], completed = r[4], description = r[8] }
+                total = total + 1
+            end
+        end
+        out.categories[#out.categories + 1] = cat
+    end
+    return out
+end
+
+-- Professions through the modern trade skill interface, plus whatever C_SkillInfo offers.
+local function scanSkillsModern()
+    local out = { tradeSkillLines = {}, skillInfo = {} }
+    if C_TradeSkillUI and C_TradeSkillUI.GetAllProfessionTradeSkillLines then
+        local ids = try(C_TradeSkillUI.GetAllProfessionTradeSkillLines)
+        if type(ids) == "table" then
+            for _, id in ipairs(ids) do
+                local info = try(C_TradeSkillUI.GetProfessionInfoBySkillLineID, id)
+                if type(info) == "table" and (info.skillLevel or 0) > 0 then
+                    out.tradeSkillLines[#out.tradeSkillLines + 1] = {
+                        skillLineID = id, name = info.professionName, rank = info.skillLevel,
+                        max = info.maxSkillLevel, modifier = info.skillModifier, parent = info.parentProfessionName,
+                    }
+                end
+            end
+        end
+    end
+    -- Full skill list (professions, weapon skills, languages) through C_SkillInfo.
+    out.allSkills = {}
+    if type(C_SkillInfo) == "table" and C_SkillInfo.GetNumSkillLines and C_SkillInfo.GetSkillLineInfo then
+        local n = try(C_SkillInfo.GetNumSkillLines)
+        if type(n) == "number" then
+            for i = 1, math.min(n, 120) do
+                local r = pack(try(C_SkillInfo.GetSkillLineInfo, i))
+                if type(r[1]) == "table" then
+                    out.allSkills[#out.allSkills + 1] = r[1]
+                elseif r[1] ~= nil then
+                    out.allSkills[#out.allSkills + 1] = r
+                end
+            end
+        end
+    end
+    -- Read-only getters that need no arguments; results show how skills are exposed.
+    if type(C_SkillInfo) == "table" then
+        for name, fn in pairs(C_SkillInfo) do
+            if type(name) == "string" and type(fn) == "function" and name:find("^Get") then
+                local r = pack(try(fn))
+                if #r > 0 then out.skillInfo[name] = r end
+            end
+        end
+    end
+    return out
+end
+
+local function scanReputation()
+    local out = {}
+    if C_Reputation and C_Reputation.GetNumFactions and C_Reputation.GetFactionDataByIndex then
+        local n = C_Reputation.GetNumFactions() or 0
+        for i = 1, n do
+            local d = try(C_Reputation.GetFactionDataByIndex, i)
+            if type(d) == "table" and d.name then
+                out[#out + 1] = {
+                    name = d.name, isHeader = d.isHeader, reaction = d.reaction,
+                    standing = d.currentStanding, floor = d.currentReactionThreshold,
+                    ceiling = d.nextReactionThreshold, atWar = d.atWarWith,
+                }
+            end
+        end
+    elseif GetNumFactions then
+        local n = try(GetNumFactions) or 0
+        for i = 1, n do out[#out + 1] = pack(try(GetFactionInfo, i)) end
+    end
+    return out
+end
+
+local function scanAuras()
+    local out = { buffs = {}, debuffs = {} }
+    if not (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then return out end
+    for _, f in ipairs({ { "HELPFUL", out.buffs }, { "HARMFUL", out.debuffs } }) do
+        for i = 1, 40 do
+            local a = try(C_UnitAuras.GetAuraDataByIndex, "player", i, f[1])
+            if type(a) ~= "table" then break end
+            f[2][#f[2] + 1] = { name = a.name, spellID = a.spellId, stacks = a.applications, duration = a.duration }
+        end
+    end
+    return out
+end
+
+local function scanClient()
+    local version, build, buildDate, interface = try(GetBuildInfo)
+    return {
+        version = version, build = build, buildDate = buildDate, interface = interface,
+        projectID = WOW_PROJECT_ID, camelotProjectID = WOW_PROJECT_CAMELOT,
+        locale = try(GetLocale),
+        addonVersion = VERSION,
+    }
+end
+
+-------------------------------------------------------------------------------
+-- Snapshot assembly
+-------------------------------------------------------------------------------
+
+local SECTIONS = {
+    { "client", scanClient },
+    { "character", scanCharacter },
+    { "location", scanLocation },
+    { "equipment", scanEquipment },
+    { "bags", scanBags },
+    { "quests", scanQuests },
+    { "completedQuests", scanCompletedQuests },
+    { "skills", scanSkills },
+    { "spells", scanSpells },
+    { "talents", scanTalents },
+    { "legacy", scanLegacy },
+    { "currencies", scanCurrencies },
+    { "challenges", scanChallenges },
+    { "skillsModern", scanSkillsModern },
+    { "reputation", scanReputation },
+    { "auras", scanAuras },
+}
+
+local function charStore()
+    DB.characters[charKey] = DB.characters[charKey] or {}
+    return DB.characters[charKey]
+end
+
+-- During a real logout the game unloads character data before add-ons are told,
+-- so bags read as empty and money as zero. Only snapshot while the data is present.
+local function worldDataReady()
+    if not (C_Container and C_Container.GetContainerNumSlots) then return true end
+    local slots = try(C_Container.GetContainerNumSlots, 0)
+    if isSecret(slots) then return false end
+    return type(slots) == "number" and slots > 0
+end
+
+local function takeSnapshot(reason)
+    if not DB or not charKey then return nil end
+    if not worldDataReady() then
+        DB.lastSkipped = { atText = date("%Y-%m-%d %H:%M:%S"), reason = reason, why = "character data not loaded" }
+        return nil
+    end
+    local store = charStore()
+    local old = store.snapshot
+    local snap = {
+        takenAt = time(),
+        takenAtText = date("%Y-%m-%d %H:%M:%S"),
+        reason = reason,
+        errors = {},
+        stale = {},
+    }
+    for _, s in ipairs(SECTIONS) do
+        local name, fn = s[1], s[2]
+        local ok, res = pcall(fn)
+        if ok then
+            snap[name] = clean(res)
+        else
+            snap.errors[name] = tostring(res)
+        end
+        if snap[name] == nil and old and old[name] ~= nil then
+            snap[name] = old[name]
+            snap.stale[name] = old.takenAtText
+        end
+    end
+    store.snapshot = snap
+    DB.lastCharacter = charKey
+    DB.lastSnapshotAt = snap.takenAt
+    lastSnapshotAt = snap.takenAt
+    dirty = false
+    return snap
+end
+
+local function requestSnapshot()
+    dirty = true
+    if pending then return end
+    pending = true
+    C_Timer.After(5, function()
+        pending = false
+        if not dirty then return end
+        if InCombatLockdown and InCombatLockdown() then return end -- retried on leaving combat
+        takeSnapshot("auto")
+    end)
+end
+
+-------------------------------------------------------------------------------
+-- Things captured only while their window is open
+-------------------------------------------------------------------------------
+
+local function captureBank()
+    local ok, res = pcall(scanBank)
+    local store = charStore()
+    if ok then
+        store.bank = { seenAtText = date("%Y-%m-%d %H:%M:%S"), bags = clean(res) }
+    else
+        store.bankError = tostring(res)
+    end
+end
+
+local function captureTrainer()
+    local n = try(GetNumTrainerServices)
+    if type(n) ~= "number" then
+        -- Older trainer functions are missing: record what the modern interface returns instead.
+        if type(C_Trainer) == "table" then
+            local raw = {}
+            for name, fn in pairs(C_Trainer) do
+                if type(name) == "string" and type(fn) == "function" and name:find("^Get") then
+                    local r = pack(try(fn))
+                    if #r > 0 then raw[name] = r end
+                end
+            end
+            charStore().trainerRaw = { seenAtText = date("%Y-%m-%d %H:%M:%S"), results = clean(raw) }
+        end
+        return
+    end
+    if n == 0 then return end
+    local list = {}
+    for i = 1, n do
+        local info = pack(try(GetTrainerServiceInfo, i))
+        if info[1] then
+            list[#list + 1] = {
+                info = info,
+                cost = pack(try(GetTrainerServiceCost, i)),
+                levelReq = try(GetTrainerServiceLevelReq, i),
+                skillReq = pack(try(GetTrainerServiceSkillReq, i)),
+            }
+        end
+    end
+    local store = charStore()
+    store.trainers = store.trainers or {}
+    local who = try(UnitName, "npc") or try(UnitName, "target") or "Unknown trainer"
+    if isSecret(who) then who = "Unknown trainer" end
+    store.trainers[who] = { seenAtText = date("%Y-%m-%d %H:%M:%S"), zone = try(GetRealZoneText), services = clean(list) }
+end
+
+local function captureMerchant()
+    local n = try(GetMerchantNumItems)
+    if type(n) ~= "number" or n == 0 then return end
+    local list = {}
+    for i = 1, n do
+        local info
+        if C_MerchantFrame and C_MerchantFrame.GetItemInfo then
+            info = try(C_MerchantFrame.GetItemInfo, i)
+        end
+        if type(info) ~= "table" then info = pack(try(GetMerchantItemInfo, i)) end
+        list[#list + 1] = { info = info, link = try(GetMerchantItemLink, i) }
+    end
+    local store = charStore()
+    store.merchants = store.merchants or {}
+    local who = try(UnitName, "npc") or try(UnitName, "target") or "Unknown merchant"
+    if isSecret(who) then who = "Unknown merchant" end
+    store.merchants[who] = {
+        seenAtText = date("%Y-%m-%d %H:%M:%S"), zone = try(GetRealZoneText),
+        canRepair = try(CanMerchantRepair), items = clean(list),
+    }
+end
+
+local function captureTaxi()
+    if not (C_TaxiMap and C_TaxiMap.GetAllTaxiNodes) then return end
+    local mapID = try(GetTaxiMapID) or (C_Map and try(C_Map.GetBestMapForUnit, "player"))
+    if not mapID then return end
+    local nodes = try(C_TaxiMap.GetAllTaxiNodes, mapID)
+    if type(nodes) ~= "table" then return end
+    local list = {}
+    for _, node in ipairs(nodes) do
+        list[#list + 1] = { name = node.name, state = node.state, nodeID = node.nodeID }
+    end
+    charStore().flightPaths = { seenAtText = date("%Y-%m-%d %H:%M:%S"), note = "state 0 = current, 1 = reachable, 2 = not yet learned", nodes = clean(list) }
+end
+
+local function captureRecipes()
+    if not (C_TradeSkillUI and C_TradeSkillUI.GetAllRecipeIDs) then return end
+    local ids = try(C_TradeSkillUI.GetAllRecipeIDs)
+    if type(ids) ~= "table" then return end
+    local profession = "Unknown"
+    local base = try(C_TradeSkillUI.GetBaseProfessionInfo)
+    if type(base) == "table" and base.professionName then profession = base.professionName end
+    local list = {}
+    for _, id in ipairs(ids) do
+        local r = try(C_TradeSkillUI.GetRecipeInfo, id)
+        if type(r) == "table" and r.name then
+            list[#list + 1] = { name = r.name, recipeID = id, learned = r.learned, difficulty = r.relativeDifficulty, craftable = r.craftable, numAvailable = r.numAvailable }
+        end
+    end
+    if #list == 0 then return end
+    local store = charStore()
+    store.recipes = store.recipes or {}
+    store.recipes[profession] = { seenAtText = date("%Y-%m-%d %H:%M:%S"), recipes = clean(list) }
+end
+
+-------------------------------------------------------------------------------
+-- One-time look at which game interfaces exist (helps future versions)
+-------------------------------------------------------------------------------
+
+local function probeAPI()
+    local p = { namespaces = {}, interesting = {} }
+    for k, v in pairs(_G) do
+        if type(k) == "string" then
+            local isNamespace = k:sub(1, 2) == "C_" and type(v) == "table"
+            if isNamespace then p.namespaces[#p.namespaces + 1] = k end
+            local lk = k:lower()
+            if (lk:find("legacy") or lk:find("camping") or lk:find("campsite") or lk:find("campfire")
+                or lk:find("forever") or lk:find("camelot")) and #p.interesting < 400 then
+                if type(v) == "function" then
+                    p.interesting[#p.interesting + 1] = k
+                elseif isNamespace then
+                    local fns = {}
+                    for fk, fv in pairs(v) do
+                        if type(fk) == "string" and type(fv) == "function" then fns[#fns + 1] = fk end
+                    end
+                    table.sort(fns)
+                    p.interesting[#p.interesting + 1] = k .. ": " .. table.concat(fns, ", ")
+                end
+            end
+        end
+    end
+    p.namespaceFunctions = {}
+    for _, nsName in ipairs({ "C_SkillInfo", "C_SpecializationInfo", "C_ClassTalents", "C_Traits", "C_GameRules",
+        "C_Trainer", "C_Bank", "C_AchievementInfo", "C_PaperDollInfo", "C_TradeSkillUI", "C_SwingTimer",
+        "C_MerchantFrame", "C_TaxiMap", "C_CurrencyInfo", "C_QuestLog", "C_PlayerInfo", "C_AuctionHouse" }) do
+        local nsTable = _G[nsName]
+        if type(nsTable) == "table" then
+            local fns = {}
+            for fk, fv in pairs(nsTable) do
+                if type(fk) == "string" and type(fv) == "function" then fns[#fns + 1] = fk end
+            end
+            table.sort(fns)
+            p.namespaceFunctions[nsName] = table.concat(fns, " ")
+        end
+    end
+    p.globals = {}
+    for k, v in pairs(_G) do
+        if type(k) == "string" and type(v) == "function" and #p.globals < 600 then
+            local lk = k:lower()
+            if (lk:find("skill") or lk:find("talent") or lk:find("trainer") or lk:find("achievement")
+                or lk:find("legacy") or lk:find("profession")) and not k:find("Mixin") and not k:find("Frame") then
+                p.globals[#p.globals + 1] = k
+            end
+        end
+    end
+    table.sort(p.globals)
+    p.version = 3
+    table.sort(p.namespaces)
+    table.sort(p.interesting)
+    p.takenAtText = date("%Y-%m-%d %H:%M:%S")
+    return p
+end
+
+-------------------------------------------------------------------------------
+-- Text summary and copy window
+-------------------------------------------------------------------------------
+
+local function buildSummary(snap)
+    local L = {}
+    local function add(s) L[#L + 1] = s end
+    local c, loc = snap.character or {}, snap.location or {}
+    add("AI Companion snapshot, " .. tostring(snap.takenAtText))
+    add(("%s: level %s %s %s (%s)"):format(tostring(c.name), tostring(c.level), tostring(c.race), tostring(c.class), tostring(c.faction)))
+    add(("XP %s/%s, rested %s, money %s"):format(tostring(c.xp), tostring(c.xpMax), tostring(c.restedXP or 0), tostring(c.moneyText)))
+    add(("Location: %s / %s (%s, %s), hearth: %s"):format(tostring(loc.zone), tostring(loc.subZone), tostring(loc.x), tostring(loc.y), tostring(loc.hearthstone)))
+    add("")
+    add("SKILLS")
+    local sk = snap.skills or {}
+    for _, s in ipairs(sk.skillLines or {}) do
+        add(("  %s %s/%s (%s)"):format(tostring(s.name), tostring(s.rank), tostring(s.max), tostring(s.category)))
+    end
+    for _, s in ipairs(sk.professions or {}) do
+        add(("  %s %s/%s"):format(tostring(s.name), tostring(s.rank), tostring(s.max)))
+    end
+    for _, sline in ipairs((snap.skillsModern or {}).tradeSkillLines or {}) do
+        add(("  %s %s/%s"):format(tostring(sline.name), tostring(sline.rank), tostring(sline.max)))
+    end
+    add("")
+    add("TALENTS")
+    for _, tree in ipairs((snap.talents or {}).trees or {}) do
+        for _, node in ipairs(tree.nodes or {}) do
+            if (node.rank or 0) > 0 then
+                add(("  %s %s/%s"):format(tostring(node.name), tostring(node.rank), tostring(node.maxRank)))
+            end
+        end
+    end
+    add("")
+    add("EQUIPMENT")
+    for _, it in ipairs(snap.equipment or {}) do
+        add(("  %s: %s [%s]"):format(tostring(it.slotName), tostring(it.name), tostring(it.qualityName)))
+    end
+    add("")
+    add("BAGS")
+    for _, b in ipairs(snap.bags or {}) do
+        add(("  Bag %s: %s slots, %s free"):format(tostring(b.bag), tostring(b.slots), tostring(b.free)))
+        for _, it in ipairs(b.items or {}) do
+            add(("    %s x%s [%s, %s] sells %s each"):format(tostring(it.name), tostring(it.count or 1),
+                tostring(it.qualityName), tostring(it.type), tostring(it.sellPriceEachText or "n/a")))
+        end
+    end
+    add("")
+    add("QUESTS")
+    for _, q in ipairs(snap.quests or {}) do
+        local status = q.complete and "COMPLETE" or "in progress"
+        add(("  [%s] %s (%s) - %s"):format(tostring(q.level), tostring(q.title), tostring(q.category), status))
+        for _, o in ipairs(q.objectives or {}) do
+            if type(o) == "table" and o.text then add("      - " .. strip(tostring(o.text))) end
+        end
+    end
+    local hasErr = false
+    for name, err in pairs(snap.errors or {}) do
+        if not hasErr then add("") add("ERRORS") hasErr = true end
+        add("  " .. tostring(name) .. ": " .. tostring(err))
+    end
+    return table.concat(L, "\n")
+end
+
+local copyFrame
+local function showCopy(text)
+    if not copyFrame then
+        local f = CreateFrame("Frame", "AICompanionCopyFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+        f:SetSize(660, 500)
+        f:SetPoint("CENTER")
+        f:SetFrameStrata("DIALOG")
+        if f.SetBackdrop then
+            f:SetBackdrop({
+                bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 },
+            })
+            f:SetBackdropColor(0, 0, 0, 0.92)
+        end
+        f:EnableMouse(true)
+        f:SetMovable(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop", f.StopMovingOrSizing)
+        local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        title:SetPoint("TOPLEFT", 12, -10)
+        title:SetText("AI Companion: press Ctrl+C to copy, Esc to close")
+        local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+        close:SetPoint("TOPRIGHT", 0, 0)
+        local sf = CreateFrame("ScrollFrame", "AICompanionCopyScroll", f, "UIPanelScrollFrameTemplate")
+        sf:SetPoint("TOPLEFT", 12, -32)
+        sf:SetPoint("BOTTOMRIGHT", -32, 12)
+        local eb = CreateFrame("EditBox", nil, sf)
+        eb:SetMultiLine(true)
+        eb:SetFontObject(ChatFontNormal)
+        eb:SetWidth(600)
+        eb:SetAutoFocus(false)
+        eb:SetScript("OnEscapePressed", function() f:Hide() end)
+        sf:SetScrollChild(eb)
+        f.editBox = eb
+        copyFrame = f
+    end
+    copyFrame.editBox:SetText(text)
+    copyFrame:Show()
+    copyFrame.editBox:SetFocus()
+    copyFrame.editBox:HighlightText()
+end
+
+-------------------------------------------------------------------------------
+-- Slash commands
+-------------------------------------------------------------------------------
+
+local function say(msg) print(PREFIX .. msg) end
+
+
+-------------------------------------------------------------------------------
+-- Auction house price checks
+-- Runs only while the auction window is open and only after the player asks.
+-- It searches for one item name at a time and records the lowest price seen.
+-------------------------------------------------------------------------------
+
+local ah = { queue = {}, running = false, current = nil, token = 0, done = 0, total = 0 }
+local priceIndex -- newest recorded price per item, rebuilt when prices change
+
+local function ahMode()
+    if C_AuctionHouse and C_AuctionHouse.SendBrowseQuery and C_AuctionHouse.GetBrowseResults then return "modern" end
+    if type(QueryAuctionItems) == "function" and type(GetNumAuctionItems) == "function" then return "classic" end
+    return nil
+end
+
+local function ahStore()
+    local st = charStore()
+    st.auction = st.auction or {}
+    return st.auction
+end
+
+-- What to look up: the shopping list written for this character, then every
+-- tradeable item in the bags and in the last bank capture.
+local function ahBuildQueue()
+    local list, seen = {}, {}
+    local function add(name, itemID, kind, count)
+        if type(name) ~= "string" or name == "" or seen[name] or #list >= 90 then return end
+        seen[name] = true
+        list[#list + 1] = { name = name, itemID = itemID, kind = kind, count = count }
+    end
+    local shopping = type(AICompanionShopping) == "table" and AICompanionShopping or {}
+    local mine = shopping[UnitName("player") or ""] or shopping[charKey or ""]
+    if type(mine) == "table" then
+        for _, entry in ipairs(mine) do
+            if type(entry) == "table" then add(entry.name, entry.itemID, "shopping")
+            elseif type(entry) == "string" then add(entry, nil, "shopping") end
+        end
+    end
+    local okBags, bags = pcall(scanBags)
+    if okBags then
+        for _, b in ipairs(bags) do
+            for _, it in ipairs(b.items) do
+                if not it.bound and it.type ~= "Quest" then add(it.name, it.itemID, "bag", it.count) end
+            end
+        end
+    end
+    local bank = charStore().bank
+    if type(bank) == "table" and type(bank.bags) == "table" then
+        for _, b in pairs(bank.bags) do
+            if type(b) == "table" and type(b.items) == "table" then
+                for _, it in pairs(b.items) do
+                    if type(it) == "table" and not it.bound and it.type ~= "Quest" then add(it.name, it.itemID, "bank", it.count) end
+                end
+            end
+        end
+    end
+    return list
+end
+
+local ahNext
+
+local function ahRecord(entry, result)
+    local store = ahStore()
+    store.results = store.results or {}
+    result.kind = entry.kind
+    result.itemID = result.itemID or entry.itemID
+    result.checkedAt = time()
+    store.results[entry.name] = clean(result)
+    priceIndex = nil
+    ah.done = ah.done + 1
+end
+
+local function ahFinish(reason)
+    if not ah.running then return end
+    ah.running = false
+    ah.current = nil
+    ah.queue = {}
+    local store = ahStore()
+    store.scannedAtText = date("%Y-%m-%d %H:%M:%S")
+    local found = 0
+    for _, r in pairs(store.results or {}) do if type(r) == "table" and r.found then found = found + 1 end end
+    store.lastRun = { checked = ah.done, planned = ah.total, found = found, ended = reason, mode = ahMode(), filtersUsed = ah.lastFilters }
+    say(("auction check %s: %d of %d items searched, %d with listings. Results reach your companion at your next logout or /aic save."):format(reason, ah.done, ah.total, found))
+end
+
+ahNext = function()
+    if not ah.running or ah.current then return end
+    if #ah.queue == 0 then ahFinish("finished") return end
+    local mode = ahMode()
+    if mode == "modern" and C_AuctionHouse.IsThrottledMessageSystemReady and not C_AuctionHouse.IsThrottledMessageSystemReady() then
+        C_Timer.After(0.5, ahNext)
+        return
+    end
+    if mode == "classic" and type(CanSendAuctionQuery) == "function" and not CanSendAuctionQuery() then
+        C_Timer.After(0.5, ahNext)
+        return
+    end
+    local entry = table.remove(ah.queue, 1)
+    ah.current = entry
+    ah.token = ah.token + 1
+    local token = ah.token
+    local ok, err
+    if mode == "modern" then
+        local sortPrice = (Enum and Enum.AuctionHouseSortOrder and Enum.AuctionHouseSortOrder.Price) or 0
+        -- The quality filters must all be switched on, or the search matches nothing.
+        local filters = {}
+        local F = Enum and Enum.AuctionHouseFilter
+        if type(F) == "table" then
+            for _, key in ipairs({ "PoorQuality", "CommonQuality", "UncommonQuality", "RareQuality", "EpicQuality",
+                                   "LegendaryQuality", "ArtifactQuality", "ExactMatch" }) do
+                if F[key] ~= nil then filters[#filters + 1] = F[key] end
+            end
+        end
+        ah.lastFilters = #filters
+        ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
+            searchString = entry.name,
+            sorts = { { sortOrder = sortPrice, reverseSort = false } },
+            filters = filters,
+            itemClassFilters = {},
+        })
+    else
+        ok, err = pcall(QueryAuctionItems, entry.name, nil, nil, 0, nil, nil, false, true, nil)
+    end
+    if not ok then
+        ahRecord(entry, { found = false, error = tostring(err) })
+        ah.current = nil
+        C_Timer.After(0.5, ahNext)
+        return
+    end
+    -- Move on if the game never answers this search.
+    C_Timer.After(8, function()
+        if ah.running and ah.current == entry and ah.token == token then
+            ahRecord(entry, { found = false, error = "no answer from the auction house" })
+            ah.current = nil
+            ahNext()
+        end
+    end)
+end
+
+local function ahBrowseResults()
+    if not ah.running or not ah.current or ahMode() ~= "modern" then return end
+    local entry = ah.current
+    local results = try(C_AuctionHouse.GetBrowseResults)
+    local best, candidates = nil, {}
+    if type(results) == "table" then
+        for _, r in ipairs(results) do
+            if type(r) == "table" and type(r.itemKey) == "table" then
+                local id = r.itemKey.itemID
+                local info = try(C_AuctionHouse.GetItemKeyInfo, r.itemKey)
+                local name = (type(info) == "table" and info.itemName) or (C_Item and try(C_Item.GetItemNameByID, id))
+                local cand = { itemID = id, name = name, minPrice = r.minPrice, quantity = r.totalQuantity }
+                if #candidates < 6 then candidates[#candidates + 1] = cand end
+                local match = (entry.itemID and id == entry.itemID) or (not entry.itemID and name == entry.name)
+                if match and (not best or (cand.minPrice or 0) < (best.minPrice or 0)) then best = cand end
+            end
+        end
+    end
+    if best then
+        ahRecord(entry, { found = true, itemID = best.itemID, minPrice = best.minPrice, minPriceText = money(best.minPrice),
+                          quantity = best.quantity, carried = entry.count })
+    else
+        ahRecord(entry, { found = false, listings = #candidates, similar = candidates, carried = entry.count })
+    end
+    ah.current = nil
+    C_Timer.After(0.4, ahNext)
+end
+
+local function ahClassicResults()
+    if not ah.running or not ah.current or ahMode() ~= "classic" then return end
+    local entry = ah.current
+    local n = try(GetNumAuctionItems, "list") or 0
+    local best, qty = nil, 0
+    for i = 1, math.min(n, 50) do
+        local r = pack(try(GetAuctionItemInfo, "list", i))
+        local name, count, buyout = r[1], r[3] or 1, r[10]
+        if name == entry.name and type(buyout) == "number" and buyout > 0 and count > 0 then
+            local each = math.floor(buyout / count)
+            qty = qty + count
+            if not best or each < best then best = each end
+        end
+    end
+    if best then
+        ahRecord(entry, { found = true, minPrice = best, minPriceText = money(best), quantity = qty, carried = entry.count })
+    else
+        ahRecord(entry, { found = false, listings = n, carried = entry.count })
+    end
+    ah.current = nil
+    C_Timer.After(0.4, ahNext)
+end
+
+local function ahStart()
+    if not DB or not charKey then return end
+    local mode = ahMode()
+    if not mode then say("this client has no auction interface I recognise.") return end
+    if ah.running then say("an auction check is already running.") return end
+    local queue = ahBuildQueue()
+    if #queue == 0 then say("nothing to price-check.") return end
+    local store = ahStore()
+    store.results = {}
+    ah.queue, ah.running, ah.current, ah.done, ah.total = queue, true, nil, 0, #queue
+    say(("checking %d prices. Keep the auction window open; this takes about %d seconds and the search list will flicker."):format(#queue, #queue * 2))
+    ahNext()
+end
+
+local ahButton
+local function ahShow()
+    if ahButton then ahButton:Show() return end
+    local parent = AuctionHouseFrame or AuctionFrame
+    if not parent then return end
+    local ok, err = pcall(function()
+        local b = CreateFrame("Button", "AICompanionAuctionButton", parent, "UIPanelButtonTemplate")
+        b:SetSize(230, 24)
+        -- The Buy / Sell / Auctions tabs hang below the left of the window, so sit at the bottom right.
+        b:SetPoint("TOPRIGHT", parent, "BOTTOMRIGHT", -4, -4)
+        b:SetFrameStrata("HIGH")
+        b:SetText("AI Companion: check prices")
+        b:SetScript("OnClick", function() local okStart, e = pcall(ahStart) if not okStart then say("auction check failed: " .. tostring(e)) end end)
+        ahButton = b
+    end)
+    if not ok and DB then DB.lastEventError = "auction button: " .. tostring(err) end
+    say("auction house open. Click 'AI Companion: check prices' below the right corner of the window, or type /aic ah.")
+end
+
+local function ahClosed()
+    if ah.running then ahFinish("stopped early because the window closed") end
+end
+
+-------------------------------------------------------------------------------
+-- Item tooltips: the companion's advice for the item, and the last auction price recorded
+-------------------------------------------------------------------------------
+
+local function rebuildPriceIndex()
+    local byID, byName = {}, {}
+    for _, st in pairs(DB.characters or {}) do
+        local a = type(st) == "table" and st.auction
+        if type(a) == "table" and type(a.results) == "table" then
+            for name, r in pairs(a.results) do
+                if type(r) == "table" and type(r.checkedAt) == "number" and not r.error then
+                    local cur = byName[name]
+                    if not cur or r.checkedAt > cur.checkedAt then
+                        byName[name] = r
+                        if r.itemID then byID[r.itemID] = r end
+                    end
+                end
+            end
+        end
+    end
+    priceIndex = { byID = byID, byName = byName }
+end
+
+local function ageText(t)
+    local s = time() - (t or 0)
+    if s < 90 then return "just now" end
+    if s < 3600 then return math.floor(s / 60) .. "m ago" end
+    if s < 172800 then return math.floor(s / 3600) .. "h ago" end
+    return math.floor(s / 86400) .. "d ago"
+end
+
+local ADVICE_LABEL = {
+    equip   = { "Equip now", 0.4, 1, 0.4 },
+    use     = { "Use now", 0.4, 0.8, 1 },
+    craft   = { "Craft now", 0.4, 0.8, 1 },
+    sell    = { "Sell to vendor", 1, 0.8, 0.3 },
+    auction = { "List on auction", 1, 0.8, 0.3 },
+    mail    = { "Mail", 0.8, 0.6, 1 },
+    bank    = { "Put in bank", 0.8, 0.6, 1 },
+    quest   = { "Quest, keep in bags", 0.8, 0.6, 1 },
+    carry   = { "Keep in bags", 1, 1, 1 },
+    keep    = { "Keep in bags", 1, 1, 1 },
+    check   = { "Ask me first", 1, 0.5, 0.4 },
+}
+
+-- The companion's recommendation for this item on the character you are playing.
+local function adviceFor(name)
+    local A = type(AICompanionAdvice) == "table" and AICompanionAdvice or nil
+    if not A or type(A.characters) ~= "table" or type(name) ~= "string" then return nil end
+    local me = try(UnitName, "player")
+    if type(me) ~= "string" or isSecret(me) then return nil end
+    local mine = A.characters[me] or A.characters[(me:match("^(%S+)")) or ""]
+    local a = type(mine) == "table" and mine[name] or nil
+    if type(a) ~= "table" then return nil end
+    return a[1], a[2], A.asOf
+end
+
+-- Built-in rules (AICompanion_Rules.lua), worked out from the latest snapshot. Used when the companion has said nothing.
+local ruleCache, ruleCacheAt
+local function ruleFor(name)
+    local Rules = type(AICompanionRules) == "table" and AICompanionRules or nil
+    if not Rules or type(Rules.adviseAll) ~= "function" or not charKey or type(name) ~= "string" then return nil end
+    local st = DB.characters and DB.characters[charKey]
+    local snap = type(st) == "table" and st.snapshot or nil
+    if type(snap) ~= "table" then return nil end
+    if not ruleCache or ruleCacheAt ~= snap.takenAt then
+        local ok, out = pcall(Rules.adviseAll, DB, charKey)
+        ruleCache, ruleCacheAt = (ok and type(out) == "table") and out or {}, snap.takenAt
+    end
+    local a = ruleCache[name]
+    if type(a) ~= "table" then return nil end
+    return a[1], a[2]
+end
+
+local function onItemTooltip(tooltip, data)
+    if not DB or not tooltip or type(tooltip.AddDoubleLine) ~= "function" then return end
+    if InCombatLockdown and InCombatLockdown() then return end
+    local id = type(data) == "table" and data.id or nil
+    if id == nil or isSecret(id) then return end
+    if not priceIndex then rebuildPriceIndex() end
+    local name = C_Item and try(C_Item.GetItemNameByID, id)
+    if type(name) ~= "string" or isSecret(name) then name = nil end
+    local r = priceIndex.byID[id] or (name and priceIndex.byName[name]) or nil
+    local action, note, asOf = adviceFor(name)
+    local fromRule = false
+    if not action then
+        action, note = ruleFor(name)
+        fromRule = action ~= nil
+    end
+    if not r and not action then return end
+    tooltip:AddLine(" ")
+    if action then
+        local L = ADVICE_LABEL[action] or { tostring(action), 1, 1, 1 }
+        tooltip:AddDoubleLine("AI Companion: " .. L[1], fromRule and "rule" or tostring(asOf or " "), L[2], L[3], L[4], 0.6, 0.6, 0.6)
+        if type(note) == "string" and note ~= "" then tooltip:AddLine(note, 0.9, 0.9, 0.9, true) end
+    end
+    if not r then return end
+    local head = action and "Auction" or "AI Companion: auction"
+    if r.found and type(r.minPrice) == "number" then
+        local getInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+        local vendor = select(11, try(getInfo, id))
+        local right, rr, rg, rb = " ", 0.6, 0.6, 0.6
+        if type(vendor) == "number" and vendor > 0 then
+            right = "vendor " .. money(vendor)
+            if r.minPrice > vendor then rr, rg, rb = 0.4, 1, 0.4 else rr, rg, rb = 1, 0.8, 0.3 end
+        end
+        tooltip:AddDoubleLine(head .. " " .. money(r.minPrice) .. " (" .. tostring(r.quantity or "?") .. " listed, " .. ageText(r.checkedAt) .. ")", right, 0.4, 0.8, 1, rr, rg, rb)
+    else
+        tooltip:AddDoubleLine(head .. ": none listed", ageText(r.checkedAt), 0.4, 0.8, 1, 0.6, 0.6, 0.6)
+    end
+end
+
+local function hookTooltips()
+    if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
+        return pcall(TooltipDataProcessor.AddTooltipPostCall, Enum.TooltipDataType.Item, function(tooltip, data)
+            pcall(onItemTooltip, tooltip, data)
+        end)
+    end
+    if GameTooltip and GameTooltip.HookScript then
+        return pcall(GameTooltip.HookScript, GameTooltip, "OnTooltipSetItem", function(tooltip)
+            local _, link = tooltip:GetItem()
+            local id = type(link) == "string" and tonumber(link:match("item:(%d+)"))
+            pcall(onItemTooltip, tooltip, { id = id })
+        end)
+    end
+    return false, "no tooltip hook available"
+end
+
+local function countErrors(snap)
+    local n = 0
+    for _ in pairs(snap.errors or {}) do n = n + 1 end
+    return n
+end
+
+local function describe(snap)
+    local items = 0
+    for _, b in ipairs(snap.bags or {}) do items = items + #(b.items or {}) end
+    return ("snapshot taken: %d bag items, %d active quests, %d completed quests, %d section errors."):format(
+        items, #(snap.quests or {}), (snap.completedQuests or {}).count or 0, countErrors(snap))
+end
+
+local function handleSlash(msg)
+    msg = (msg or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    local cmd, rest = msg:match("^(%S*)%s*(.-)$")
+    cmd = (cmd or ""):lower()
+    if not DB then say("not loaded yet, try again in a moment.") return end
+
+    if cmd == "" or cmd == "snap" then
+        local snap = takeSnapshot("manual")
+        if not snap then say("could not take a snapshot right now.") end
+        if snap then say(describe(snap) .. " Type /aic save to write it to disk for your companion.") end
+    elseif cmd == "save" or cmd == "sync" then
+        local snap = takeSnapshot("save")
+        if snap then say(describe(snap) .. " Reloading to write it to disk. If the screen does not reload, type /reload.") end
+        -- Must run directly from the typed command: the game blocks reloads started from a timer.
+        ReloadUI()
+    elseif cmd == "copy" then
+        local snap = takeSnapshot("copy")
+        if snap then
+            local ok, err = pcall(showCopy, buildSummary(snap))
+            if not ok then say("could not open the copy window: " .. tostring(err)) end
+        end
+    elseif cmd == "ask" then
+        if rest == "" then say("usage: /aic ask <your question>") return end
+        DB.questions = DB.questions or {}
+        DB.questions[#DB.questions + 1] = { askedAtText = date("%Y-%m-%d %H:%M:%S"), character = charKey, text = rest }
+        takeSnapshot("ask")
+        say("question noted. Type /aic save to send it with a fresh snapshot.")
+    elseif cmd == "ah" or cmd == "auction" then
+        ahStart()
+    elseif cmd == "probe" then
+        local ok, res = pcall(probeAPI)
+        if ok then DB.apiProbe = clean(res) say("interface probe stored (" .. #res.namespaces .. " namespaces).")
+        else say("probe failed: " .. tostring(res)) end
+    else
+        say("commands:")
+        print("  /aic            take a snapshot now")
+        print("  /aic save       take a snapshot and reload so it is written to disk")
+        print("  /aic copy       show a text summary you can copy and paste")
+        print("  /aic ask <q>    note a question for your companion")
+        print("  /aic ah         at an auctioneer: check prices for your bags, bank and shopping list")
+    end
+end
+
+SLASH_AICOMPANION1 = "/aic"
+SLASH_AICOMPANION2 = "/companion"
+SlashCmdList["AICOMPANION"] = function(msg)
+    local ok, err = pcall(handleSlash, msg)
+    if not ok then print(PREFIX .. "error: " .. tostring(err)) end
+end
+
+-------------------------------------------------------------------------------
+-- Events
+-------------------------------------------------------------------------------
+
+local frame = CreateFrame("Frame")
+
+local handlers = {}
+
+function handlers.ADDON_LOADED(name)
+    if name ~= ADDON_NAME then return end
+    if type(AICompanionDB) ~= "table" then AICompanionDB = {} end
+    DB = AICompanionDB
+    DB.addonVersion = VERSION
+    DB.characters = DB.characters or {}
+    DB.questions = DB.questions or {}
+    local okHook, hookErr = hookTooltips()
+    DB.tooltipHook = okHook and "ok" or ("failed: " .. tostring(hookErr))
+end
+
+function handlers.PLAYER_LOGIN()
+    if not DB then return end
+    local name = UnitName("player") or "Unknown"
+    local realm = try(GetRealmName) or "Unknown"
+    charKey = name .. "@" .. realm
+    C_Timer.After(5, function()
+        if type(DB.apiProbe) ~= "table" or DB.apiProbe.version ~= 3 then
+            local ok, res = pcall(probeAPI)
+            if ok then DB.apiProbe = clean(res) else DB.apiProbeError = tostring(res) end
+        end
+        if not (InCombatLockdown and InCombatLockdown()) then takeSnapshot("login") end
+        if C_Timer.NewTicker then
+            C_Timer.NewTicker(120, function() pcall(snapshotNow, "periodic") end)
+        end
+        say("v" .. VERSION .. " ready. Type /aic save to send your companion a fresh snapshot, /aic help for more.")
+    end)
+end
+
+function handlers.PLAYER_LOGOUT()
+    -- Deliberately no snapshot here: character data is already unloading on a real logout.
+    if DB then DB.lastLogoutText = date("%Y-%m-%d %H:%M:%S") end
+end
+
+local function snapshotNow(reason)
+    if not DB or not charKey then return end
+    if InCombatLockdown and InCombatLockdown() then return end
+    takeSnapshot(reason)
+end
+
+-- Fired when the logout or exit countdown starts, and when leaving the world.
+handlers.PLAYER_CAMPING = function() snapshotNow("logout started") end
+handlers.PLAYER_QUITING = function() snapshotNow("exit started") end
+handlers.PLAYER_LEAVING_WORLD = function() snapshotNow("leaving world") end
+
+function handlers.PLAYER_REGEN_ENABLED()
+    if dirty then requestSnapshot() end
+end
+
+handlers.BANKFRAME_OPENED = function() C_Timer.After(0.5, function() pcall(captureBank) end) end
+handlers.TRAINER_SHOW = function() C_Timer.After(0.5, function() pcall(captureTrainer) end) end
+handlers.MERCHANT_SHOW = function() C_Timer.After(0.5, function() pcall(captureMerchant) end) end
+handlers.TAXIMAP_OPENED = function() C_Timer.After(0.5, function() pcall(captureTaxi) end) end
+handlers.TRADE_SKILL_LIST_UPDATE = function() pcall(captureRecipes) end
+handlers.AUCTION_HOUSE_SHOW = ahShow
+handlers.AUCTION_HOUSE_CLOSED = ahClosed
+handlers.AUCTION_HOUSE_BROWSE_RESULTS_UPDATED = ahBrowseResults
+handlers.AUCTION_ITEM_LIST_UPDATE = ahClassicResults
+handlers.AUCTION_HOUSE_THROTTLED_SYSTEM_READY = function() if ah.running and not ah.current then ahNext() end end
+
+local REFRESH_EVENTS = {
+    "BAG_UPDATE_DELAYED", "QUEST_LOG_UPDATE", "PLAYER_LEVEL_UP", "PLAYER_MONEY",
+    "ZONE_CHANGED_NEW_AREA", "PLAYER_EQUIPMENT_CHANGED", "SKILL_LINES_CHANGED",
+    "SPELLS_CHANGED", "CHARACTER_POINTS_CHANGED", "HEARTHSTONE_BOUND",
+    "PLAYER_XP_UPDATE", "ZONE_CHANGED", "ZONE_CHANGED_INDOORS", "UPDATE_FACTION",
+    "TRAIT_CONFIG_UPDATED", "QUEST_DATA_LOAD_RESULT", "PLAYER_UPDATE_RESTING", "QUEST_TURNED_IN", "QUEST_ACCEPTED",
+}
+
+frame:SetScript("OnEvent", function(_, event, ...)
+    local h = handlers[event]
+    if h then
+        local ok, err = pcall(h, ...)
+        if not ok and DB then DB.lastEventError = event .. ": " .. tostring(err) end
+        return
+    end
+    if DB and charKey then requestSnapshot() end
+end)
+
+for event in pairs(handlers) do pcall(frame.RegisterEvent, frame, event) end
+for _, event in ipairs(REFRESH_EVENTS) do pcall(frame.RegisterEvent, frame, event) end

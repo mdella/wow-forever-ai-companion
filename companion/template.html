@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forever Character Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Archivo+Narrow:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: roster strip on top, one character at a time below; summary and next actions first, reference detail after. */
+:root {
+  --bg: #f2f4f3; --surface: #ffffff; --sunken: #e8ecea; --ink: #17211f; --muted: #56655f; --line: #d3dbd8;
+  --coin-g: #856000; --coin-s: #56606b; --coin-c: #a04a16; --accent: #7a4f0c; --accent-soft: #f3e8d3;
+  --good: #1c7046; --good-soft: #dff1e7; --warn: #8f5200; --warn-soft: #f8ead2; --crit: #a8251d; --crit-soft: #f9e1de;
+  --info: #25567f; --info-soft: #e0ecf6; --neutral-soft: #e6ebe9;
+  --display: "Archivo Narrow", "Arial Narrow", Arial, sans-serif; --body: "Archivo", "Segoe UI", system-ui, sans-serif;
+  --radius: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1514; --surface: #171f1d; --sunken: #121918; --ink: #e5ebe9; --muted: #9cabaa; --line: #2b3735;
+    --coin-g: #f0c84b; --coin-s: #c5ced8; --coin-c: #e39562; --accent: #e2b45e; --accent-soft: #3b3018;
+    --good: #66c692; --good-soft: #17352a; --warn: #e3a44f; --warn-soft: #3a2c14; --crit: #f08379; --crit-soft: #3f1d1a;
+    --info: #86b6de; --info-soft: #172c3f; --neutral-soft: #222c2a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1514; --surface: #171f1d; --sunken: #121918; --ink: #e5ebe9; --muted: #9cabaa; --line: #2b3735;
+  --coin-g: #f0c84b; --coin-s: #c5ced8; --coin-c: #e39562; --accent: #e2b45e; --accent-soft: #3b3018;
+  --good: #66c692; --good-soft: #17352a; --warn: #e3a44f; --warn-soft: #3a2c14; --crit: #f08379; --crit-soft: #3f1d1a;
+  --info: #86b6de; --info-soft: #172c3f; --neutral-soft: #222c2a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.5; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px 80px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; letter-spacing: 0.01em; }
+h1 { font-size: 30px; font-weight: 700; }
+h2 { font-size: 24px; font-weight: 700; }
+h3 { font-size: 18px; font-weight: 600; }
+p { margin: 0; }
+a { color: var(--info); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--info); outline-offset: 2px; border-radius: 4px; }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: 14px; }
+
+.top { padding: 28px 0 18px; display: flex; flex-wrap: wrap; gap: 6px 24px; align-items: baseline; justify-content: space-between; }
+.top p { color: var(--muted); font-size: 14px; }
+
+/* Roster */
+.roster { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.rcard { text-align: left; background: var(--surface); border: 1px solid var(--line); border-left: 6px solid var(--cls, var(--line)); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; }
+.rcard[aria-selected="true"] { border-color: var(--accent); border-left-color: var(--cls, var(--accent)); box-shadow: 0 0 0 2px var(--accent); }
+.rcard:hover { background: var(--sunken); }
+.rcard .nm { font-family: var(--display); font-weight: 700; font-size: 20px; line-height: 1.2; }
+.rcard .sub { font-size: 14px; color: var(--muted); }
+.rcard.pending { cursor: default; border-style: dashed; border-left-style: dashed; }
+.rcard.pending:hover { background: var(--surface); }
+.bar { height: 8px; background: var(--sunken); border-radius: 99px; overflow: hidden; position: relative; border: 1px solid var(--line); }
+.bar > i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 99px; }
+.bar > i.rest { background: var(--info); opacity: 0.45; }
+.bar.good > i { background: var(--good); } .bar.warn > i { background: var(--warn); } .bar.crit > i { background: var(--crit); }
+
+/* Character header */
+.hero { margin-top: 16px; background: var(--surface); border: 1px solid var(--line); border-top: 6px solid var(--cls, var(--accent)); border-radius: var(--radius); padding: 20px; display: grid; gap: 16px; }
+.hero-top { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; align-items: flex-start; }
+.hero h2 { font-size: 30px; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 24px; }
+.fact .k { font-family: var(--display); font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.fact .v { font-weight: 600; }
+.xp { display: grid; gap: 6px; }
+.xp .bar { height: 12px; }
+.headline { font-size: 18px; max-width: 65ch; }
+
+.chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--display); font-weight: 600; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 9px; border-radius: 99px; background: var(--neutral-soft); color: var(--ink); white-space: nowrap; border: 1px solid transparent; }
+.coin { font-weight: 600; white-space: nowrap; } .coin.g { color: var(--coin-g); } .coin.s { color: var(--coin-s); } .coin.c { color: var(--coin-c); }
+.chip.good { background: var(--good-soft); color: var(--good); } .chip.warn { background: var(--warn-soft); color: var(--warn); }
+.chip.crit { background: var(--crit-soft); color: var(--crit); } .chip.info { background: var(--info-soft); color: var(--info); }
+.chip.accent { background: var(--accent-soft); color: var(--accent); }
+.chip.outline { background: transparent; border-color: var(--line); color: var(--muted); }
+a.chip { text-decoration: none; } a.chip:hover { text-decoration: underline; }
+
+/* Section nav */
+.stick { position: sticky; top: 0; z-index: 5; background: var(--bg); margin-top: 14px; border-bottom: 1px solid var(--line); }
+.secnav { padding: 10px 0; display: flex; gap: 6px; overflow-x: auto; }
+.names { display: none; gap: 6px; padding: 10px 0 0; overflow-x: auto; }
+body.scrolled .names { display: flex; }
+.names button { font-family: var(--display); font-weight: 700; font-size: 16px; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--line); border-left: 5px solid var(--cls, var(--line)); background: var(--surface); cursor: pointer; white-space: nowrap; }
+.names button[aria-current="true"] { border-color: var(--accent); border-left-color: var(--cls, var(--accent)); box-shadow: 0 0 0 1px var(--accent); }
+.names button:hover { background: var(--sunken); }
+.names span.pend { font-family: var(--display); font-weight: 600; font-size: 16px; padding: 5px 12px; border-radius: 6px; border: 1px dashed var(--line); color: var(--muted); white-space: nowrap; }
+.hero { scroll-margin-top: 116px; }
+.secnav a { font-family: var(--display); font-weight: 600; font-size: 15px; color: var(--ink); text-decoration: none; padding: 6px 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); white-space: nowrap; }
+.secnav a:hover { border-color: var(--accent); color: var(--accent); }
+
+section.blk { margin-top: 34px; scroll-margin-top: 116px; display: grid; gap: 14px; }
+.blk > header { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; justify-content: space-between; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+
+/* Steps */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.step { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.step input { width: 20px; height: 20px; margin-top: 3px; accent-color: var(--good); cursor: pointer; }
+.step .t { font-weight: 600; }
+.step .d { color: var(--muted); max-width: 70ch; margin-top: 2px; }
+.step .meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.step.done .t { text-decoration: line-through; color: var(--muted); }
+.mark { width: 20px; height: 20px; margin-top: 3px; border-radius: 50%; border: 2px solid var(--line); display: inline-block; position: relative; }
+.mark.on { background: var(--good); border-color: var(--good); }
+.mark.on::after { content: ""; position: absolute; left: 5px; top: 1px; width: 5px; height: 10px; border: solid var(--surface); border-width: 0 2.5px 2.5px 0; transform: rotate(45deg); }
+.mark.info { border-style: dashed; }
+.step.done { background: var(--sunken); }
+.next .step { border-left: 4px solid var(--accent); }
+.next .step .n { font-family: var(--display); font-weight: 700; color: var(--accent); margin-right: 6px; }
+.route { display: grid; gap: 10px; }
+.route > .rh { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+
+/* Items */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.filters button { border: 1px solid var(--line); background: var(--surface); border-radius: 99px; padding: 5px 12px; cursor: pointer; font-family: var(--display); font-weight: 600; font-size: 15px; }
+.filters button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; }
+th { font-family: var(--display); font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 600; }
+td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+td.r, th.r { text-align: right; white-space: nowrap; }
+.iname { font-weight: 600; }
+.q0 { color: var(--muted); } .q2 { color: var(--good); } .q3 { color: var(--info); }
+details > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+details .tip { margin-top: 6px; font-size: 14px; color: var(--muted); display: grid; gap: 2px; white-space: pre-line; }
+
+/* Professions and gear */
+.prow { display: grid; gap: 6px; }
+.prow .ph { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.slotgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.slot { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; display: grid; gap: 4px; }
+.slot .sn { font-family: var(--display); font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.kv { display: flex; flex-wrap: wrap; gap: 6px 10px; }
+.quest { display: grid; gap: 6px; }
+.quest .qh { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; justify-content: space-between; }
+ul.plain { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.done-list { columns: 3 220px; column-gap: 24px; margin-top: 10px; font-size: 14px; }
+.done-list div { break-inside: avoid; padding: 2px 0; }
+input[type="search"] { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); width: min(100%, 320px); }
+.legend { margin-top: 40px; display: grid; gap: 8px; }
+.legend .row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; }
+@media (max-width: 520px) { h1 { font-size: 26px; } .hero h2 { font-size: 26px; } .wrap { padding: 0 16px 60px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Forever Character Planner</h1>
+    <p id="built"></p>
+  </header>
+  <nav class="roster" id="roster" role="tablist" aria-label="Characters"></nav>
+  <main id="view"></main>
+  <footer class="legend card" id="legend"></footer>
+</div>
+<script>
+const DATA = /*DATA*/null;
+const CLS = { PRIEST: "#b9bfc4", HUNTER: "#7aa84a", MAGE: "#4aa6c9", WARRIOR: "#a5835a", ROGUE: "#c9b53a", DRUID: "#d27a2a", PALADIN: "#d98aa8", SHAMAN: "#3a6fd0", WARLOCK: "#7d74c4" };
+const TAGS = {
+  game: ["From your game data", "good", "Read directly from the snapshot your add-on saved."],
+  lookup: ["Looked up · Forever source", "info", "From a source written for WoW Forever, linked on the step."],
+  classic: ["Looked up · original game", "warn", "From a source about the original game that does not mention Forever. Probably still true, but not confirmed for Forever."],
+  judgment: ["My judgment", "accent", "A recommendation I am making. Reasonable, but not a fact from the game."],
+  unverified: ["Not verified", "crit", "I could not confirm this for Forever yet. Ask me before relying on it."]
+};
+const ACTIONS = { equip: ["Equip now", "good"], use: ["Use now", "info"], craft: ["Craft now", "info"], sell: ["Sell to vendor", "warn"], auction: ["List on auction", "warn"], mail: ["Mail", "accent"], bank: ["Put in bank", "accent"], quest: ["Quest: keep in bags", "accent"], carry: ["Keep in bags", ""], check: ["Ask me first", "crit"] };
+const ACTION_ORDER = ["equip", "use", "craft", "sell", "auction", "mail", "bank", "quest", "carry", "check"];
+const QSTATUS = { ready: ["Ready to hand in", "good"], deliver: ["Delivery: travel to finish", "info"], progress: ["In progress", "warn"], todo: ["Not started", "outline"] };
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const coin = s => esc(s).replace(/(\d[\d,]*) (gold|silver|copper)\b/g, (m, n, k) => `<span class="coin ${k[0]}">${n} ${k}</span>`);
+const fmt = n => (typeof n === "number" ? n.toLocaleString("en-US") : "?");
+const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+let current = null, itemFilter = "all", jumpToTop = false;
+
+function chip(label, kind, href) {
+  const cls = "chip" + (kind ? " " + kind : "");
+  return href ? `<a class="${cls}" href="${esc(href)}" target="_blank" rel="noopener">${esc(label)}</a>` : `<span class="${cls}">${esc(label)}</span>`;
+}
+function tagChips(step) {
+  const t = TAGS[step.tag] || TAGS.judgment;
+  let out = chip(t[0], t[1]);
+  const src = step.source && DATA.sources[step.source];
+  if (src) out += chip((src.scope === "classic" ? "Original-game source: " : src.scope === "mixed" ? "Source (locations from the original game): " : "Source: ") + src.label, "outline", src.url);
+  return out;
+}
+function bar(pct, kind, restPct) {
+  const p = Math.max(0, Math.min(100, pct || 0));
+  const r = restPct ? `<i class="rest" style="width:${Math.min(100, p + restPct)}%"></i>` : "";
+  return `<div class="bar ${kind || ""}">${r}<i style="width:${p}%"></i></div>`;
+}
+function stepHtml(s, n) {
+  const num = n ? `<span class="n num">${n}.</span>` : "";
+  const body = (title, extra) => `<div>${title}<p class="d">${esc(s.detail || "")}</p><div class="meta">${extra}${s.tag ? tagChips(s) : ""}</div></div>`;
+  if (s.auto !== undefined) {
+    const mark = `<span class="mark ${s.auto ? "on" : ""}" role="img" aria-label="${s.auto ? "Done" : "Not done yet"}"></span>`;
+    const state = s.auto ? chip("Done · seen in your game data", "good") : chip("Not done yet · updates itself", "outline");
+    return `<li class="step${s.auto ? " done" : ""}">${mark}${body(`<span class="t">${num}${esc(s.title || s.text)}</span>`, state)}</li>`;
+  }
+  if (s.kind === "note") {
+    return `<li class="step note"><span class="mark info" role="img" aria-label="Note"></span>${body(`<span class="t">${num}${esc(s.title)}</span>`, chip("For reference", "outline"))}</li>`;
+  }
+  const done = store.get("fcp:" + s.id) === "1";
+  return `<li class="step${done ? " done" : ""}">
+    <input type="checkbox" id="cb-${esc(s.id)}" data-step="${esc(s.id)}" ${done ? "checked" : ""}>
+    ${body(`<label class="t" for="cb-${esc(s.id)}">${num}${esc(s.title)}</label>`, chip("Tick it yourself · I can't see this", "warn"))}</li>`;
+}
+
+function renderRoster() {
+  const el = document.getElementById("roster");
+  el.innerHTML = DATA.chars.map(c => {
+    const pct = c.xpMax ? (c.xp / c.xpMax) * 100 : 0;
+    const n = c.plan ? c.plan.next.filter(s => s.auto !== true).length : 0;
+    return `<button class="rcard" role="tab" data-id="${c.id}" aria-selected="${current === c.id}" style="--cls:${CLS[c.clsFile] || "var(--accent)"}">
+      <span class="nm">${esc(c.first)} ${esc(c.last)}</span>
+      <span class="sub">Level ${c.level} ${esc(c.race)} ${esc(c.cls)} · ${esc(c.zone)}</span>
+      ${bar(pct)}
+      <span class="sub num">${Math.round(pct)}% to level ${c.level + 1} · ${n} things to do next</span></button>`;
+  }).join("") + DATA.pending.map(n => `<div class="rcard pending" aria-disabled="true">
+      <span class="nm">${esc(n)}</span><span class="sub">Not captured yet</span>
+      <span class="sub">Log in to this character, wait ten seconds, then log out.</span></div>`).join("");
+  el.querySelectorAll("button.rcard").forEach(b => b.addEventListener("click", () => { location.hash = b.dataset.id; }));
+}
+
+function renderChar(c) {
+  const p = c.plan || {};
+  const pct = c.xpMax ? (c.xp / c.xpMax) * 100 : 0, restPct = c.xpMax ? (c.rested / c.xpMax) * 100 : 0;
+  const toGo = (c.xpMax || 0) - (c.xp || 0);
+  const free = c.bags.reduce((a, b) => a + (b.free || 0), 0), slots = c.bags.reduce((a, b) => a + (b.slots || 0), 0);
+  const old = !c.completed;
+  let h = `<article style="--cls:${CLS[c.clsFile] || "var(--accent)"}">
+  <div class="stick">
+  <nav class="names" aria-label="Characters">${DATA.chars.map(x => `<button data-char="${x.id}" aria-current="${x.id === c.id}" style="--cls:${CLS[x.clsFile] || "var(--accent)"}">${esc(x.first)} ${esc(x.last)}</button>`).join("")}${DATA.pending.map(n => `<span class="pend" title="Not captured yet">${esc(n)}</span>`).join("")}</nav>
+  <nav class="secnav" aria-label="Sections for ${esc(c.first)}">${[["top", "Overview"], ["next", "Do next"], ["quest", "Questing plan"], ["items", "Items"], ["prof", "Professions"], ["gear", "Gear"], ["tal", "Talents"], ["log", "Quest log"], ["gaps", "Not captured yet"]].map(x => `<a href="#" data-jump="${c.id}-${x[0]}">${x[1]}</a>`).join("")}</nav>
+  </div>
+  <div class="hero" id="${c.id}-top">
+    <div class="hero-top">
+      <div><h2>${esc(c.first)} ${esc(c.last)}</h2>
+        <p class="muted">Level ${c.level} ${esc(c.race)} ${esc(c.cls)} · ${esc(c.sex)} · ${esc(c.faction)}${c.pet ? ` · Pet: ${esc(c.pet.family || "")} (level ${esc(c.pet.level)})` : ""}</p></div>
+      <div class="kv">${chip("Snapshot " + (c.takenAt || "unknown"), "outline")}${old ? chip("Older add-on version: some data missing", "warn") : ""}</div>
+    </div>
+    ${p.headline ? `<p class="headline">${esc(p.headline)}</p>` : ""}
+    <div class="xp"><div class="kv" style="justify-content:space-between"><span class="fact"><span class="k">Experience</span></span>
+      <span class="num small"><strong>${fmt(c.xp)}</strong> of ${fmt(c.xpMax)} · ${fmt(toGo)} to level ${c.level + 1}${c.rested ? ` · ${fmt(c.rested)} rested` : ""}</span></div>
+      ${bar(pct, "", restPct)}</div>
+    <div class="facts">
+      <div class="fact"><div class="k">Money</div><div class="v num">${coin(c.moneyText)}</div></div>
+      <div class="fact"><div class="k">Location</div><div class="v">${esc(c.place)}${c.place && c.zone && c.place !== c.zone ? ", " + esc(c.zone) : ""}</div></div>
+      <div class="fact"><div class="k">Hearthstone</div><div class="v">${esc(c.hearth || "Unknown")}</div></div>
+      <div class="fact"><div class="k">Bag space</div><div class="v num">${free} free of ${slots} slots</div></div>
+      <div class="fact"><div class="k">Sell list value</div><div class="v num">${coin(c.sellTotalText)}</div></div>
+    </div>
+  </div>`;
+
+  if (p.next) h += `<section class="blk next" id="${c.id}-next" aria-labelledby="h-next"><header><h2 id="h-next">Do next</h2><p class="muted small">In the order to do them, starting from where ${esc(c.first)} is standing. Steps mark themselves done when the next snapshot shows it.</p></header>
+    <ol class="steps">${p.next.map((s, i) => stepHtml(s, i + 1)).join("")}</ol></section>`;
+
+  // Questing plan
+  h += `<section class="blk" id="${c.id}-quest"><header><h2>Questing plan</h2><p class="muted small">Grouped by direction of travel.</p></header>`;
+  h += (p.questing || []).map(r => `<div class="route"><div class="rh"><h3>${esc(r.title)}</h3><p class="muted small">${esc(r.note || "")}</p></div><ul class="steps">${r.steps.map(s => stepHtml(s)).join("")}</ul></div>`).join("") || `<p class="muted">No plan written yet.</p>`;
+  h += `</section>`;
+
+  // Items
+  const counts = {}; c.items.forEach(i => counts[i.action] = (counts[i.action] || 0) + 1);
+  const order = ACTION_ORDER.filter(a => counts[a]);
+  h += `<section class="blk" id="${c.id}-items"><header><h2>Items</h2><p class="muted small num">${c.items.length} kinds of item · selling the Sell list brings in ${coin(c.sellTotalText)}</p></header>
+    ${p.bags ? `<p class="card">${esc(p.bags)}</p>` : ""}
+    <div class="filters" role="group" aria-label="Filter items by what to do">
+      <button data-filter="all" aria-pressed="${itemFilter === "all"}">All (${c.items.length})</button>
+      ${order.map(a => `<button data-filter="${a}" aria-pressed="${itemFilter === a}">${ACTIONS[a][0]} (${counts[a]})</button>`).join("")}</div>
+    <div class="tablewrap"><table><thead><tr><th>Item</th><th>What to do now</th><th>Why</th><th class="r">Vendor value</th></tr></thead><tbody>
+    ${c.items.slice().sort((a, b) => ACTION_ORDER.indexOf(a.action) - ACTION_ORDER.indexOf(b.action) || (b.each * b.count) - (a.each * a.count))
+      .filter(i => itemFilter === "all" || i.action === itemFilter).map(i => `<tr>
+        <td><span class="iname q${i.q}">${esc(i.name)}</span>${i.count > 1 ? ` <span class="muted num">×${i.count}</span>` : ""}<div class="muted small">${esc(i.type || "")}${i.sub ? " · " + esc(i.sub) : ""}</div></td>
+        <td>${chip(ACTIONS[i.action][0], ACTIONS[i.action][1])}</td>
+        <td>${coin(i.note)}${i.tip.length ? `<details><summary>Game tooltip</summary><div class="tip">${i.tip.map(esc).join("\n")}</div></details>` : ""}</td>
+        <td class="r num">${coin(i.totalText)}</td></tr>`).join("")}
+    </tbody></table></div></section>`;
+
+  // Professions
+  h += `<section class="blk" id="${c.id}-prof"><header><h2>Professions</h2></header><div class="grid2">
+    ${c.professions.map(pr => { const pl = pr.plan || {}; const pc = pr.max ? (pr.rank / pr.max) * 100 : 0; const near = pr.max && pr.rank >= pr.max - 10;
+      return `<div class="card prow"><div class="ph"><h3>${esc(pr.name)}</h3><span class="num">${pr.rank == null ? chip("Not learned", "outline") : `<strong>${pr.rank}</strong> of ${pr.max}`}</span></div>
+        ${pr.rank == null ? "" : bar(pc, near ? "warn" : "good")}
+        ${near ? `<div>${chip("Near the cap for this rank", "warn")}</div>` : ""}
+        ${pl.status ? `<p>${esc(pl.status)}</p>` : ""}${pl.next ? `<p class="muted"><strong>Next:</strong> ${esc(pl.next)}</p><div class="kv">${tagChips(pl)}</div>` : ""}</div>`; }).join("")}
+    </div>
+    ${c.weaponSkills.length ? `<div class="card"><h3>Weapon skills</h3><div class="kv" style="margin-top:8px">${c.weaponSkills.map(w => `<span class="chip ${w.rank < w.max - 10 ? "warn" : ""} num">${esc(w.name)} ${w.rank}/${w.max}</span>`).join("")}</div></div>` : ""}
+    ${c.recipesCaptured.length ? `<p class="muted small">Recipe lists captured for: ${c.recipesCaptured.map(esc).join(", ")}.</p>` : ""}
+  </section>`;
+
+  // Gear
+  h += `<section class="blk" id="${c.id}-gear"><header><h2>Gear</h2></header>
+    ${p.gear ? `<ul class="steps">${p.gear.map(s => stepHtml(s)).join("")}</ul>` : ""}
+    <div class="slotgrid">${c.equipment.map(e => { const dp = e.durMax ? (e.dur / e.durMax) * 100 : null; const kind = dp == null ? "" : dp < 35 ? "crit" : dp < 65 ? "warn" : "good";
+      return `<div class="slot"><span class="sn">${esc(e.slot)}</span><span class="iname q${e.q}">${esc(e.name)}</span>
+        ${dp == null ? "" : `${bar(dp, kind)}<span class="small muted num">Durability ${e.dur} of ${e.durMax}</span>`}
+        ${e.tip.length ? `<details><summary>Game tooltip</summary><div class="tip">${e.tip.map(esc).join("\n")}</div></details>` : ""}</div>`; }).join("")}</div>
+    <p class="muted small">Empty slots: ${c.emptySlots.map(esc).join(", ") || "none"}.</p></section>`;
+
+  // Talents
+  const t = c.talents, tp = p.talents || {};
+  h += `<section class="blk" id="${c.id}-tal"><header><h2>Talents</h2><p class="muted small num">${t.spent || 0} points spent · ${t.unspent || 0} waiting</p></header>
+    ${tp.note || tp.suggestion ? `<div class="card">${tp.note ? `<p>${esc(tp.note)}</p>` : ""}${tp.suggestion ? `<p class="muted" style="margin-top:6px">${esc(tp.suggestion)}</p><div class="kv" style="margin-top:8px">${tagChips(tp)}</div>` : ""}</div>` : ""}
+    <div class="grid2">${t.groups.map(g => `<div class="card"><div class="ph" style="display:flex;justify-content:space-between"><h3>${esc(g.name)}</h3><span class="num">${g.spent} points</span></div>
+      ${g.picks.length ? `<ul class="plain" style="margin-top:8px">${g.picks.map(k => `<li><strong>${esc(k.name)}</strong> <span class="num muted">${k.rank}/${k.max}</span><div class="muted small">${esc(k.desc || "")}</div></li>`).join("")}</ul>` : `<p class="muted small" style="margin-top:6px">Nothing spent here.</p>`}</div>`).join("")}</div>
+    ${t.firstRow.length ? `<div class="card"><h3>First-row options, as the game describes them</h3><ul class="plain" style="margin-top:8px">${t.firstRow.map(k => `<li><strong>${esc(k.name)}</strong> <span class="muted small">${esc(k.tree)} · up to ${k.max} points</span><div class="muted small">${esc(k.desc || "")}</div></li>`).join("")}</ul></div>` : ""}
+    ${c.legacy.length ? `<details class="card"><summary>Legacy perks (none bought yet)</summary>${c.legacy.map(l => `<h3 style="margin-top:12px">${esc(l.name)}</h3><ul class="plain" style="margin-top:6px">${l.perks.map(k => `<li><strong>${esc(k.name)}</strong> <span class="num muted">${k.rank}/${k.max}</span><div class="muted small">${esc(k.desc || "")}</div></li>`).join("")}</ul>`).join("")}</details>` : ""}
+  </section>`;
+
+  // Quest log
+  const sOrder = ["ready", "deliver", "progress", "todo"];
+  h += `<section class="blk" id="${c.id}-log"><header><h2>Quest log</h2><p class="muted small num">${c.quests.length} active${c.completed ? ` · ${c.completed.count} completed` : ""}</p></header>
+    <div class="grid2">${c.quests.slice().sort((a, b) => sOrder.indexOf(a.status) - sOrder.indexOf(b.status) || a.level - b.level).map(q => `<div class="card quest">
+      <div class="qh"><h3>${esc(q.title)}</h3>${chip(QSTATUS[q.status][0], QSTATUS[q.status][1])}</div>
+      <p class="muted small num">Level ${q.level} · ${esc(q.cat || "")} · ${fmt(q.xp)} XP${q.moneyText ? " · " + coin(q.moneyText) : ""}</p>
+      ${q.objs.length ? `<ul class="plain">${q.objs.map(o => `<li>${o.done ? "<s>" : ""}${esc(o.text)}${o.done ? "</s>" : ""}</li>`).join("")}</ul>` : ""}
+      ${q.text ? `<details><summary>Quest instructions</summary><div class="tip">${esc(q.text)}</div></details>` : ""}
+      ${q.choices.length ? `<p class="small"><strong>Choose one:</strong> ${q.choices.map(esc).join(", ")}</p>` : ""}${q.rewards.length ? `<p class="small"><strong>Also get:</strong> ${q.rewards.map(esc).join(", ")}</p>` : ""}</div>`).join("")}</div>
+    ${c.completed ? `<details class="card" id="${c.id}-done"><summary>Completed quests (${c.completed.titles.length} titles)</summary>
+      <p style="margin-top:10px"><label class="small muted" for="${c.id}-dq">Find a quest</label><br><input type="search" id="${c.id}-dq" placeholder="Type part of a name"></p>
+      <div class="done-list">${c.completed.titles.map(x => `<div data-t="${esc(x[0].toLowerCase())}">${esc(x[0])}${x[1] > 1 ? ` <span class="muted num">×${x[1]}</span>` : ""}</div>`).join("")}</div></details>`
+      : `<p class="card muted">The completed-quest list is missing because this snapshot came from an older version of the add-on. Log in and out once to fill it in.</p>`}
+  </section>`;
+
+  h += `<section class="blk" id="${c.id}-gaps"><header><h2>Not captured yet</h2><p class="muted small">Opening each window once is enough; the add-on remembers it.</p></header>
+    <ul class="steps">${(p.blindspots || []).map(b => stepHtml(b)).join("")}</ul></section></article>`;
+  return h;
+}
+
+function show(id, keepScroll) {
+  const c = DATA.chars.find(x => x.id === id) || DATA.chars[0];
+  if (!c) return;
+  if (current !== c.id) itemFilter = "all";
+  current = c.id;
+  renderRoster();
+  const view = document.getElementById("view");
+  view.innerHTML = renderChar(c);
+  view.querySelectorAll("input[data-step]").forEach(cb => cb.addEventListener("change", () => {
+    store.set("fcp:" + cb.dataset.step, cb.checked ? "1" : "0");
+    view.querySelectorAll(`input[data-step="${cb.dataset.step}"]`).forEach(o => { o.checked = cb.checked; o.closest(".step").classList.toggle("done", cb.checked); });
+  }));
+  view.querySelectorAll("[data-char]").forEach(b => b.addEventListener("click", () => {
+    if (b.dataset.char === current) { const top = document.getElementById(current + "-top"); if (top) top.scrollIntoView(); return; }
+    jumpToTop = true; location.hash = b.dataset.char;
+  }));
+  if (jumpToTop) { jumpToTop = false; const top = document.getElementById(c.id + "-top"); if (top) top.scrollIntoView(); }
+  view.querySelectorAll("[data-jump]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); const t = document.getElementById(a.dataset.jump); if (t) t.scrollIntoView(); }));
+  view.querySelectorAll("[data-filter]").forEach(b => b.addEventListener("click", () => { itemFilter = b.dataset.filter; const y = window.scrollY; show(current, true); window.scrollTo(0, y); }));
+  const dq = document.getElementById(c.id + "-dq");
+  if (dq) dq.addEventListener("input", () => { const v = dq.value.trim().toLowerCase(); view.querySelectorAll(".done-list div").forEach(d => { d.hidden = v && !d.dataset.t.includes(v); }); });
+}
+
+document.getElementById("built").textContent = "Read from your game files. Latest snapshot: " + DATA.built + ".";
+document.getElementById("legend").innerHTML = `<h3>How steps get marked done</h3>
+  <div class="row"><span class="mark on"></span><span class="muted small">Marked by the page when your game data shows it: a quest handed in, an item equipped or sold, a skill reached. It changes the next time the page is rebuilt from a new snapshot.</span></div>
+  <div class="row"><span class="mark"></span><span class="muted small">Not done yet, and the page will notice by itself.</span></div>
+  <div class="row"><input type="checkbox" disabled aria-hidden="true"><span class="muted small">A tick box appears only on steps the game data cannot show, such as eating before a fight. Those ticks are kept in this browser.</span></div>
+  <h3 style="margin-top:12px">Where each recommendation comes from</h3>` + Object.keys(TAGS).map(k => `<div class="row">${chip(TAGS[k][0], TAGS[k][1])}<span class="muted small">${TAGS[k][2]}</span></div>`).join("");
+window.addEventListener("hashchange", () => show(location.hash.slice(1)));
+// Show the compact name strip only once the full character cards have scrolled out of view.
+if ("IntersectionObserver" in window) {
+  new IntersectionObserver(es => { document.body.classList.toggle("scrolled", !es[0].isIntersecting); }).observe(document.getElementById("roster"));
+} else { document.body.classList.add("scrolled"); }
+show(location.hash.slice(1));
+</script>
+</body>
+</html>

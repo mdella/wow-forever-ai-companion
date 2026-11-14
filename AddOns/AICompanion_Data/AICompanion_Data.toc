@@ -1,0 +1,6 @@
+## Interface: 16001
+## Title: AI Companion Data
+## Notes: Your own shopping lists and item advice for AI Companion, written by your AI companion. Updating AI Companion never touches this folder.
+## Version: 1
+
+AICompanion_Data.lua

@@ -1,0 +1,9 @@
+# Personal data never belongs in this repository
+plans.json
+out/
+SavedVariables/
+WTF/
+*.bak
+*.new
+__pycache__/
+.DS_Store
