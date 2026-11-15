@@ -296,6 +296,9 @@ end
 
 local FRAME_NAME = "AICompanionPanel"
 local DEFAULT_W, MIN_W, MIN_H, MAX_DEFAULT_H = 780, 560, 360, 700
+local MAX_W, MAX_H = 1600, 1200
+local TAB_LEFT, TAB_GAP, FALLBACK_TAB_W = 11, 3, 104   -- tabs start 11 in and sit 3 apart, as on the character sheet
+local function clamp(v, lo, hi) return math.min(math.max(v, lo), hi) end
 local MARGIN = 14                 -- one left margin for banner, rows, headings and footer
 local ROW_H = 26                  -- even row height for one-line rows
 -- Fonts: step titles large; headings in the normal heading font, never larger than a title.
@@ -579,6 +582,7 @@ render = function()
             if key == current then tab:LockHighlight() else tab:UnlockHighlight() end
         end
     end
+    pcall(fitTabs, frame)
     local rows = Panel.rows(m, current, expanded)
     frame.lastRows = rows
     local width = (frame:GetWidth() or DEFAULT_W) - 2 * MARGIN - 30
@@ -596,7 +600,7 @@ local function savePosition()
     local point, _, relPoint, x, y = frame:GetPoint(1)
     if point then pdb.point = { point, relPoint, x, y } end
     local w, h = frame:GetWidth(), frame:GetHeight()
-    if w and h then pdb.width, pdb.height = math.max(w, MIN_W), math.max(h, MIN_H) end
+    if w and h then pdb.width, pdb.height = clamp(w, MIN_W, MAX_W), clamp(h, MIN_H, MAX_H) end
 end
 
 -- Default height: what the Do next tab needs, between the minimum and 700.
@@ -633,6 +637,29 @@ local function makeWindow()
 end
 
 -- Tabs: the client's own tab buttons along the bottom edge, or plain buttons as the fallback.
+-- The tabs never run past the window's right edge: they keep their natural width when all six
+-- fit, and otherwise share the width evenly. Runs whenever the panel is drawn or resized.
+local function fitTabs(f)
+    local w = f:GetWidth()
+    if type(w) ~= "number" or #f.Tabs == 0 then return end
+    local avail = w - 2 * TAB_LEFT - TAB_GAP * (#f.Tabs - 1)
+    if f.nativeTabs then
+        local total = 0
+        for _, b in ipairs(f.Tabs) do
+            pcall(PanelTemplates_TabResize, b, 0)
+            total = total + (b:GetWidth() or 0)
+        end
+        if total > avail then
+            local each = math.floor(avail / #f.Tabs)
+            for _, b in ipairs(f.Tabs) do pcall(PanelTemplates_TabResize, b, 0, each) end
+        end
+    else
+        local each = math.min(FALLBACK_TAB_W, math.floor(avail / #f.Tabs))
+        for _, b in ipairs(f.Tabs) do b:SetWidth(each) end
+    end
+end
+Panel.fitTabs = function() if frame then fitTabs(frame) end end
+
 local function makeTabs(f)
     f.Tabs = f.Tabs or {}
     local native = true
@@ -644,7 +671,7 @@ local function makeTabs(f)
         b:SetText(s.label)
         if type(PanelTemplates_TabResize) == "function" then pcall(PanelTemplates_TabResize, b, 0) end
         b:ClearAllPoints()
-        if prev then b:SetPoint("TOPLEFT", prev, "TOPRIGHT", 3, 0) else b:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 11, 2) end
+        if prev then b:SetPoint("TOPLEFT", prev, "TOPRIGHT", TAB_GAP, 0) else b:SetPoint("TOPLEFT", f, "BOTTOMLEFT", TAB_LEFT, 2) end
         b:SetScript("OnClick", function() current, expanded = s.key, nil render() end)
         f.Tabs[i] = b
         tabs[s.key] = b
@@ -657,10 +684,12 @@ local function makeTabs(f)
     -- fallback: a row of standard buttons inside the window
     for _, b in pairs(tabs) do b:Hide() end
     tabs, prev = {}, nil
-    for _, s in ipairs(Panel.SECTIONS) do
+    f.Tabs = {}
+    for i, s in ipairs(Panel.SECTIONS) do
         local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        b:SetSize(104, 24)
-        if prev then b:SetPoint("LEFT", prev, "RIGHT", 4, 0) else b:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", MARGIN, 8) end
+        b:SetSize(FALLBACK_TAB_W, 24)
+        if prev then b:SetPoint("LEFT", prev, "RIGHT", TAB_GAP, 0) else b:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", TAB_LEFT, 8) end
+        f.Tabs[i] = b
         b:SetText(s.label)
         b:SetScript("OnClick", function() current, expanded = s.key, nil render() end)
         tabs[s.key] = b
@@ -675,7 +704,12 @@ local function build()
     local f, inner, kind = makeWindow()
     body = inner
     local m = currentModel()
-    f:SetSize(math.max(pdb.width or DEFAULT_W, MIN_W), math.max(pdb.height or Panel.defaultHeight(m), MIN_H))
+    -- a size saved by an older version (other limits) is brought within today's
+    local w = clamp(tonumber(pdb.width) or DEFAULT_W, MIN_W, MAX_W)
+    local h = clamp(tonumber(pdb.height) or Panel.defaultHeight(m), MIN_H, MAX_H)
+    if pdb.width ~= nil then pdb.width = w end
+    if pdb.height ~= nil then pdb.height = h end
+    f:SetSize(w, h)
     if type(pdb.point) == "table" then f:SetPoint(pdb.point[1], UIParent, pdb.point[2], pdb.point[3], pdb.point[4])
     else f:SetPoint("CENTER") end
     f:SetFrameStrata("DIALOG")
@@ -683,7 +717,7 @@ local function build()
     f:EnableMouse(true)
     f:SetMovable(true)
     f:SetResizable(true)
-    if f.SetResizeBounds then f:SetResizeBounds(MIN_W, MIN_H, 1600, 1200) end
+    if f.SetResizeBounds then f:SetResizeBounds(MIN_W, MIN_H, MAX_W, MAX_H) end
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", function(self) self:StartMoving() end)
     f:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() savePosition() end)
@@ -709,6 +743,8 @@ local function build()
     f.headline:SetWordWrap(true)
     if f.headline.SetMaxLines then f.headline:SetMaxLines(2) end
     f.nativeTabs = makeTabs(f)
+    fitTabs(f)
+    f:SetScript("OnSizeChanged", function() pcall(fitTabs, f) end)
     -- the list, with its own scroll bar (visible track and thumb) and mouse-wheel scrolling
     local bottom = f.nativeTabs and 30 or 40
     scroll = CreateFrame("ScrollFrame", nil, inner)

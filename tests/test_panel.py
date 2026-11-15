@@ -633,3 +633,79 @@ class NativeWindow(PanelTest):
         footer = self.panel(g).footer
         self.assertEqual(footer("2026-11-14 17:44:10", "Nov 14", "2026-11-15"), "Snapshot 2026-11-14 17:44 \u00b7 Plan Nov 14")
         self.assertEqual(footer(None, None, "2026-11-15"), "No snapshot yet")
+
+
+class FitsAtEveryWidth(PanelTest):
+    """Owner feedback on #23: tabs never pass the window's edge, and nothing is cut off, at any allowed width."""
+
+    def tabs_right_edge(self, g):
+        r = to_py(g.lua.eval('''(function()
+            local f = AICompanionPanel
+            local first = f.Tabs[1].point
+            local x = first[4] or 0
+            for i, t in ipairs(f.Tabs) do x = x + (t.width or 0) if i > 1 then x = x + 3 end end
+            return { x, f.width } end)()'''))
+        return r[0], r[1]
+
+    def at_minimum(self, g):
+        g.lua.execute('local f = AICompanionPanel f:SetSize(300, 200) f.scripts.OnSizeChanged(f) f.scripts.OnDragStop(f)')
+        self.panel(g).render()
+
+    def test_tabs_fit_at_minimum_width(self):
+        g = self.game(data_source=data_file())
+        f = self.open(g)
+        self.at_minimum(g)
+        self.assertEqual(g.db()["panel"]["width"], 560)
+        right, width = self.tabs_right_edge(g)
+        self.assertLessEqual(right, width - 11)
+
+    def test_tabs_shrink_to_fit_when_their_text_is_large(self):
+        w = W.world()
+        w["tabCharWidth"] = 14            # a large UI scale or font: natural tabs would be ~730 wide
+        g = self.game(w, data_source=data_file())
+        self.open(g)
+        self.at_minimum(g)
+        right, width = self.tabs_right_edge(g)
+        self.assertLessEqual(right, width - 11)
+        widths = to_py(g.lua.eval("(function() local o = {} for i, t in ipairs(AICompanionPanel.Tabs) do o[i] = t.width end return o end)()"))
+        self.assertEqual(len(set(widths)), 1)   # shared evenly
+
+    def test_tabs_get_their_natural_width_when_there_is_room(self):
+        g = self.game(data_source=data_file())
+        self.open(g)
+        widths = to_py(g.lua.eval("(function() local o = {} for i, t in ipairs(AICompanionPanel.Tabs) do o[i] = t.width end return o end)()"))
+        self.assertEqual(widths, [len(t) * 7 + 20 for t in ("Do next", "Questing", "Professions", "Gear", "Talents", "Items")])
+
+    def test_fallback_buttons_fit_at_minimum_width(self):
+        w = W.world()
+        w["noFrameTemplates"] = True
+        g = self.game(w, data_source=data_file())
+        self.open(g)
+        self.at_minimum(g)
+        right, width = self.tabs_right_edge(g)
+        self.assertLessEqual(right, width - 11)
+
+    def test_size_saved_by_an_older_version_is_brought_within_limits(self):
+        g = self.game(data_source=data_file())
+        g.lua.execute("AICompanionDB.panel = { width = 300, height = 2400, ticks = {} }")
+        f = self.open(g)
+        self.assertEqual((f.width, f.height), (560, 1200))
+        self.assertEqual((g.db()["panel"]["width"], g.db()["panel"]["height"]), (560, 1200))
+
+    def test_nothing_is_cut_off_at_minimum_width(self):
+        g = self.game(data_source=data_file())
+        self.open(g)
+        self.at_minimum(g)
+        rows = to_py(g.lua.eval('''(function() local o = {}
+            for _, fr in ipairs(Mock.frames) do
+                if fr.kind == "Button" and rawget(fr, "title") and fr.shown then
+                    o[#o + 1] = { fr.title.text, fr.title.wordWrap == true, fr.title.width or 0, rawget(fr.title, "maxLines") or 0 }
+                end
+            end return o end)()'''))
+        by_text = {r[0]: r for r in rows}
+        note = by_text["Two free slots in the pouch."]
+        self.assertTrue(note[1])                        # wraps instead of "..."
+        self.assertGreater(note[2], 100)
+        self.assertLessEqual(note[2], 560 - 2 * 14)     # inside the window's margins
+        self.assertTrue(by_text["Open your Leatherworking window once."][1])
+        self.assertEqual([r[0] for r in rows if r[3] == 1], [])   # nothing limited to one line

@@ -5,7 +5,7 @@
 
 local ADDON_NAME, ns = ...
 ns = type(ns) == "table" and ns or {}
-local VERSION = "0.12.0"
+local VERSION = "0.12.1"
 local PREFIX = "|cff66ccffAI Companion|r: "
 
 local DB            -- AICompanionDB once loaded

@@ -276,7 +276,11 @@ TEMPLATES.PanelTabButtonTemplate = function(b)
 end
 function ButtonFrameTemplate_HidePortrait(f) f.portraitShown = false end
 function ButtonFrameTemplate_HideButtonBar(f) f.buttonBar = false end
-function PanelTemplates_TabResize(tab) tab.resized = true end
+-- A tab is as wide as its text plus its sides, unless given an absolute width (as the client does).
+function PanelTemplates_TabResize(tab, padding, absoluteSize)
+    local text = rawget(tab, "text") or ""
+    tab.width = absoluteSize or (#text * (W.tabCharWidth or 7) + 20 + (padding or 0))
+end
 function PanelTemplates_SetNumTabs(f, n) f.numTabs = n end
 function PanelTemplates_SetTab(f, id)
     f.selectedTab = id
