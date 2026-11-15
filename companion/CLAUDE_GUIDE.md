@@ -141,7 +141,14 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 4. List what is not captured yet (bank, profession windows, other characters) and ask for those in-game actions.
 5. Research Forever sources for the character's level and zone, then write `plans.json`, generate the data file, and ask for `/reload`.
 
+## 9. Reporting problems and requests
+
+1. File every add-on bug or feature request as a GitHub issue on `ztarsi/wow-forever-ai-companion`, from the player's account. Issues filed from any other account are ignored. A maintainer agent checks issues every hour and answers each with a pull request or a question on the issue.
+2. **No personal data in issues.** The repository is public. No character, realm, account or guild names, no paths containing the user name, and no whole SavedVariables files. Use made-up names in excerpts.
+3. Do not edit the add-on on the player's PC to work around a bug. Report it, and update the add-on once the fix is merged.
+
 ## Changelog
 
+- 0.8.1 — The two-minute background snapshot now runs (it never did). Rule advice always fits the 48-character tooltip limit.
 - 0.8.0 — Built-in rules give item advice without an assistant. Tooltip text limited to one short line (`tip`).
 - 0.7.0 — Personal data moved to the separate `AICompanion_Data` add-on. Item advice in tooltips with immediate actions. Auction price check.

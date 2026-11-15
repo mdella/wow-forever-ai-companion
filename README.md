@@ -78,6 +78,7 @@ Auction 7c (2653 listed, 34m ago)          vendor 1c
 | `AddOns/AICompanion_Data/` | Your shopping lists and item advice. Ships empty. |
 | `companion/CLAUDE_GUIDE.md` | Instructions for the assistant. |
 | `companion/` | Tools the assistant uses: `gen_data.py` (writes the data add-on from a plan file), `build.py` and `template.html` (dashboard), `plans.example.json` (plan file format). |
+| `tests/` | Automated checks: the add-on run inside a stand-in game client. Run on every change. |
 
 ## License
 
