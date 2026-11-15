@@ -318,6 +318,18 @@ class Auction(GameTest):
         self.assertEqual(len(g.auction_queries()), sent)
         self.assertIn("stopped early", g.char()["auction"]["lastRun"]["ended"])
 
+    def test_button_sits_under_the_window_without_touching_it(self):
+        g = self.game()
+        g.M.openAuction()
+        b = g.lua.globals().AICompanionAuctionButton
+        self.assertTrue(g.lua.eval("AICompanionAuctionButton.parent == UIParent"))
+        p = to_py(b.point)
+        self.assertEqual((p[0], p[2], p[3], p[4]), ("TOPRIGHT", "BOTTOMLEFT", 1096, 196))   # under the bottom right corner
+        g.M.closeAuction()
+        self.assertFalse(b.shown)
+        g.M.openAuction()
+        self.assertTrue(b.shown)
+
     def test_second_start_while_running_is_refused(self):
         g = self.game()
         g.M.openAuction()
@@ -571,45 +583,114 @@ class BagSort(GameTest):
         g.advance(120)
         self.assertEqual(self.names_in_order(g), SORTED_ORDER)
 
-    def sort_buttons(self, g):
-        out = []
-        for f in to_py(g.M.frames):
-            if f.get("text") == "Sort by advice":
-                out.append((f["parent"]["name"], f["point"]))
-        return out
+    def sort_button(self, g):
+        return g.lua.globals().AICompanionSortButton
 
-    def test_button_on_the_bag_window(self):
+    def test_button_follows_the_open_bag_window(self):
         w = sort_world()
         w["bagFrames"] = "login"
         g = self.game(w)
-        buttons = self.sort_buttons(g)
-        self.assertEqual(sorted(n for n, _ in buttons), ["ContainerFrame1", "ContainerFrameCombinedBags"])
-        self.assertEqual(buttons[0][1][0], "BOTTOMRIGHT")   # sits above the window's top edge
+        b = self.sort_button(g)
+        self.assertTrue(g.lua.eval("AICompanionSortButton.parent == UIParent"))   # never a child of a bag window
+        self.assertFalse(b.shown)                                                  # bags closed
+        g.lua.execute("OpenAllBags()")
+        g.advance(0.3)
+        self.assertTrue(b.shown)
+        p = to_py(b.point)
+        self.assertEqual((p[0], p[2], p[3], p[4]), ("BOTTOMRIGHT", "BOTTOMLEFT", 1596, 602))   # just above the window's top right
+        self.assertTrue(g.lua.eval("AICompanionSortButton.point[2] == UIParent"))
+        g.lua.execute("ToggleAllBags()")
+        g.advance(0.3)
+        self.assertFalse(b.shown)
 
-    def test_button_added_when_bags_first_open(self):
+    def test_button_when_bag_windows_appear_late(self):
         w = sort_world()
         w["bagFrames"] = "late"
         g = self.game(w)
-        self.assertEqual(self.sort_buttons(g), [])
+        self.assertFalse(self.sort_button(g).shown)
         g.lua.execute("OpenAllBags()")
-        self.assertEqual(len(self.sort_buttons(g)), 2)
-        g.lua.execute("ToggleAllBags() ToggleAllBags()")
-        self.assertEqual(len(self.sort_buttons(g)), 2)      # not added twice
+        g.advance(0.3)
+        self.assertTrue(self.sort_button(g).shown)
+
+    def test_nothing_hooks_bag_opening(self):
+        w = sort_world()
+        w["bagFrames"] = "login"
+        g = self.game(w)
+        g.lua.execute("OpenAllBags() ToggleAllBags() ToggleAllBags()")
+        g.advance(1)
+        self.assertEqual(to_py(g.M.hooks) or [], [])
+
+    def test_button_click_sorts(self):
+        w = sort_world()
+        w["bagFrames"] = "login"
+        g = self.game(w)
+        g.lua.execute("OpenAllBags()")
+        g.advance(0.3)
+        b = self.sort_button(g)
+        b.scripts.OnClick(b)
+        g.advance(30)
+        self.assertEqual(self.names_in_order(g), SORTED_ORDER)
 
     def test_debug_report(self):
         w = sort_world()
         w["bagFrames"] = "login"
         g = self.game(w)
+        g.lua.execute("OpenAllBags()")
+        g.advance(0.3)
         g.slash("/aic sort debug")
         chat = " ".join(g.chat())
-        self.assertIn("bag windows found: ContainerFrameCombinedBags (enumerated)", chat)
-        self.assertIn("sort button on: ContainerFrameCombinedBags, ContainerFrame1", chat)
+        self.assertIn("bag windows: ContainerFrameCombinedBags (open), ContainerFrame1 (closed)", chat)
+        self.assertIn("sort button: shown above ContainerFrameCombinedBags", chat)
         g.slash("/aic sort")
         g.advance(30)
         g.slash("/aic save")
         debug = g.disk()["sortDebug"]
         self.assertGreater(debug["lastRun"]["moves"], 0)
-        self.assertIn("ContainerFrame1", debug["buttons"])
+
+
+class BlockedActions(GameTest):
+    """Issue #15: a blocked or forbidden action is recorded so it can be traced."""
+
+    def test_blocked_action_is_recorded(self):
+        g = self.game(sort_world())
+        g.slash("/aic")
+        g.fire("ADDON_ACTION_BLOCKED", "AICompanion", "UseContainerItem()")
+        rec = g.db()["blockedActions"][0]
+        self.assertEqual((rec["event"], rec["func"], rec["inCombat"]), ("ADDON_ACTION_BLOCKED", "UseContainerItem()", False))
+        self.assertTrue(rec["lastAction"].startswith("snapshot (manual)"))
+        self.assertEqual(rec["addonVersion"], g.db()["addonVersion"])
+        self.assertTrue(any("the game blocked UseContainerItem()" in l for l in g.chat()))
+        g.slash("/aic save")
+        self.assertEqual(g.disk()["blockedActions"][0]["func"], "UseContainerItem()")
+
+    def test_says_so_once_and_keeps_the_last_twenty(self):
+        g = self.game(sort_world())
+        for i in range(25):
+            g.fire("ADDON_ACTION_BLOCKED", "AICompanion", "F%d()" % i)
+        recs = g.db()["blockedActions"]
+        self.assertEqual((len(recs), recs[0]["func"], recs[-1]["func"]), (20, "F5()", "F24()"))
+        self.assertEqual(len([l for l in g.chat() if "the game blocked" in l]), 1)
+
+    def test_other_addons_are_not_recorded(self):
+        g = self.game(sort_world())
+        g.fire("ADDON_ACTION_BLOCKED", "SomeOtherAddon", "UseContainerItem()")
+        self.assertNotIn("blockedActions", g.db())
+
+    def test_forbidden_move_is_recorded_with_what_the_sort_was_doing(self):
+        w = sort_world()
+        w["forbidMoves"] = True
+        g = self.game(w)
+        g.slash("/aic sort")
+        g.advance(5)
+        rec = g.db()["blockedActions"][0]
+        self.assertEqual(rec["event"], "ADDON_ACTION_FORBIDDEN")
+        self.assertTrue(rec["lastAction"].startswith("sort: moving"), rec["lastAction"])
+
+    def test_blocked_shown_in_debug_report(self):
+        g = self.game(sort_world())
+        g.fire("ADDON_ACTION_BLOCKED", "AICompanion", "UseContainerItem()")
+        g.slash("/aic sort debug")
+        self.assertTrue(any("last blocked action" in l and "UseContainerItem()" in l for l in g.chat()))
 
 
 class BagSortRealTiming(GameTest):

@@ -13,7 +13,8 @@ This is the AI Companion add-on for **World of Warcraft: Forever** and the tools
 6. **Never snapshot at logout.** Character data is already unloaded at `PLAYER_LOGOUT`. Keep the `worldDataReady` guard.
 7. **`ReloadUI()` only directly from a slash command**, never from a timer.
 8. **Auction queries** must set the quality filters or they return nothing, run one name at a time, and respect the throttle.
-9. **Agent-facing documents** (`companion/CLAUDE_GUIDE.md`, this file) state rules as rules, with the changelog at the end.
+9. **Never taint the game's frames.** Add-on frames are children of `UIParent` (or sit on the minimap edge, as minimap buttons do) and are placed by reading a game window's position (`GetRight`, `GetTop`), never anchored to, parented to, or written onto a game window, and nothing hooks the game's bag-opening functions. Touching the bag windows made the game block using items from the bags (issue #15). The stand-in client refuses these patterns, and the add-on records any blocked action in `AICompanionDB.blockedActions`.
+10. **Agent-facing documents** (`companion/CLAUDE_GUIDE.md`, this file) state rules as rules, with the changelog at the end.
 
 ## What needs a game restart
 
