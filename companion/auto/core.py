@@ -12,8 +12,10 @@ IS_WIN, IS_MAC = os.name == "nt", sys.platform == "darwin"
 DEFAULTS = {
     "enabled": True,
     "dry_run": False,
-    "max_runs_per_day": 3,
-    "min_gap_hours": 2,
+    # TESTING DEFAULTS while players try this out. Set back to 3 runs a day, 2 hours apart, before
+    # this is released (the README table says the same).
+    "max_runs_per_day": 50,
+    "min_gap_hours": 5 / 60,          # 5 minutes
     "model": "sonnet",
     "max_budget_usd_per_run": 0.75,
     "debounce_seconds": 30,
@@ -310,6 +312,11 @@ def changes(old, new, seen_zones, cfg):
 
 # ------------------------------------------------------------------ budget
 
+def gap_text(hours):
+    """The minimum gap in plain words: 5 min, 2h."""
+    return "%d min" % round(hours * 60) if hours < 1 else "%gh" % hours
+
+
 def budget_block(cfg, store, at=None):
     """Why an AI run may not start now, or None."""
     at = at or now()
@@ -522,8 +529,8 @@ def report(cfg, out=print):
     out("\nlast %d active day(s): %.1f runs/day, $%.3f per run, %d input + %d output tokens per run" % (
         len(last7), sum(d["runs"] for d in last7) / len(last7), sum(d["cost"] for d in last7) / n,
         sum(d["in"] for d in last7) / n, sum(d["out"] for d in last7) / n))
-    out("limits: %d runs/day, %sh apart, model %s, cap $%s per run" % (
-        cfg["max_runs_per_day"], cfg["min_gap_hours"], cfg["model"], cfg.get("max_budget_usd_per_run")))
+    out("limits: %d runs/day, %s apart, model %s, cap $%s per run" % (
+        cfg["max_runs_per_day"], gap_text(cfg["min_gap_hours"]), cfg["model"], cfg.get("max_budget_usd_per_run")))
 
 
 def check(cfg, scheduler_installed, out=print):

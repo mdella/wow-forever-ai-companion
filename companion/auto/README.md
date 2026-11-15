@@ -39,8 +39,8 @@ When an update finishes, you get a notification: type `/reload` in the game to s
 ## Limits
 
 The defaults:
-- at most **3 updates a day**
-- at least **2 hours apart**
+- at most **50 updates a day**, temporary while it's being tested (normally 3)
+- at least **5 minutes apart**, temporary while it's being tested (normally 2 hours)
 - Claude's **Sonnet** model
 - web research only for a new zone or level range
 
@@ -52,8 +52,8 @@ The settings are in `config.json`. Its location is shown by the Check script:
 
 | Setting | Default | What it does |
 |---|---|---|
-| `max_runs_per_day` | 3 | Updates allowed per day |
-| `min_gap_hours` | 2 | Hours between updates |
+| `max_runs_per_day` | 50 while testing (normally 3) | Updates allowed per day |
+| `min_gap_hours` | 0.083 (5 minutes) while testing (normally 2) | Hours between updates |
 | `model` | `sonnet` | Claude model for updates |
 | `max_budget_usd_per_run` | 0.75 | Spending cap for one update |
 | `enabled` | true | false pauses it without uninstalling |

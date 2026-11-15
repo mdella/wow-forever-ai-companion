@@ -63,8 +63,8 @@ def main(argv):
         core.Store(cfg)
         cfg.save(["companion_dir", "python"])          # remember the choices the watcher must reuse
         print(scheduler.install(cfg, os.path.abspath(__file__)))
-        print("Limits: %d AI runs a day, at least %sh apart, model %s. Settings: %s" % (
-            cfg["max_runs_per_day"], cfg["min_gap_hours"], cfg["model"], cfg.path))
+        print("Limits: %d AI runs a day, at least %s apart, model %s. Settings: %s" % (
+            cfg["max_runs_per_day"], core.gap_text(cfg["min_gap_hours"]), cfg["model"], cfg.path))
         core.check(cfg, installed())
         return 0
     if cmd == "uninstall":

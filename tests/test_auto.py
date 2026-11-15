@@ -67,6 +67,7 @@ class AutoTest(unittest.TestCase):
         os.makedirs(self.home)
         with open(os.path.join(self.home, "config.json"), "w") as f:
             json.dump({"game_dir": self.game, "companion_dir": self.companion, "debounce_seconds": 0,
+                       "max_runs_per_day": 3, "min_gap_hours": 2,           # fixed here, whatever the defaults
                        "claude_cmd": [sys.executable, self.fake], "python": sys.executable}, f)
         self.env = os.environ.get("AIC_AUTO_HOME")
         os.environ["AIC_AUTO_HOME"] = self.home
@@ -328,6 +329,17 @@ class Schedulers(AutoTest):
         finally:
             m.uninstall()
         self.assertFalse(m.installed())
+
+
+class Defaults(unittest.TestCase):
+    def test_defaults_are_valid_limits(self):
+        self.assertGreaterEqual(core.DEFAULTS["max_runs_per_day"], 1)
+        self.assertGreater(core.DEFAULTS["min_gap_hours"], 0)
+        self.assertEqual(core.DEFAULTS["model"], "sonnet")
+
+    def test_gap_in_plain_words(self):
+        self.assertEqual(core.gap_text(5 / 60), "5 min")
+        self.assertEqual(core.gap_text(2), "2h")
 
 
 if __name__ == "__main__":
