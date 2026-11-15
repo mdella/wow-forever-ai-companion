@@ -86,7 +86,7 @@ python3 gen_data.py plans.json <game>/Interface/AddOns/AICompanion_Data/AICompan
 
 Then ask the player to `/reload`.
 
-The same file carries the plan sections (`headline`, `next`, `questing`, `professions`, `gear`, `talents`, `bags`, `blindspots`, with their `done` rules and the `sources` table). The player sees them in the in-game panel, one line per step, so write every step to make sense without the web page: the title alone says what to do (keep it short), the detail says where, and the player opens the detail by clicking the step.
+The same file carries the plan sections (`headline`, `next`, `questing`, `professions`, `gear`, `talents`, `bags`, `blindspots`, with their `done` rules and the `sources` table). The player sees them in the in-game panel, one line per step, so write every step to make sense without the web page: the title alone says what to do (keep it short), the detail says where, and the player opens the detail by clicking the step. The panel shows no source tags in the list. An expanded step adds one plain line for a `classic` tag or a source with `"scope": "classic"` ("From the original game. Not confirmed for Forever.") and for `unverified` ("Not verified yet."), then the source's name. Keep `tag` accurate: it decides those lines and the web dashboard still shows it.
 
 - Character keys are **first names** exactly as the game shows them.
 - `items`: one entry per item name, `{ "action": ..., "tip": ..., "note": ... }`.
@@ -154,6 +154,7 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 ## Changelog
 
+- 0.10.2 — Panel looks like a game window: the client's titled frame with tabs along the bottom, a headline banner, "2 of 6 done", the next step highlighted, finished steps greyed under a Done divider, an expand arrow on each row, smaller headings that wrap, and a height that fits the plan. Source tags are gone from the list; an expanded step says "From the original game. Not confirmed for Forever." or "Not verified yet." when that applies.
 - 0.10.1 — Panel easier to read: 900 by 700 by default, larger text, one line per step with the detail and source on click, short coloured source tags, a two-line headline (new optional `headlineShort`), a one-line footer, and a visible scroll bar with mouse-wheel scrolling. The minimap button is round, in the standard gold ring, with a hover tooltip and pressed state.
 - 0.10.0 — In-game companion panel: the plan for the character being played (headline, Do next, Questing, Professions, Gear, Talents, Items by action), opened from a minimap button, the add-on menu where the client has one, or `/aic panel`. Steps with a `done` rule tick themselves from the latest snapshot; the rest get a tick box. `gen_data.py` now writes the plan into the data file. Needs a full game restart once (new file).
 - 0.9.1 — Bag sort works with real server timing: it waits for each move to be confirmed and accepts the in-between state of the two slots, instead of stopping at once with "your bags changed". A stop now names the bag, slot, expected and found item. `/aic sort debug` lists the bag windows found and where the button went (also saved as `sortDebug`). The button is added whenever bags are opened, not only at login.

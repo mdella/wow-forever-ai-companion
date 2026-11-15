@@ -86,16 +86,25 @@ class Content(PanelTest):
             "t-lw": (True, True), "t-lw60": (True, False), "t-junk": (True, False), "t-all": (True, True),
             "t-rec": (True, False), "t-odd": (False, False),
         })
-        self.assertEqual([l["number"] for l in self.step_lines(g)], list(range(1, 11)))  # doing order kept
+        # open steps first in doing order, then the finished ones; numbers kept
+        self.assertEqual([l["number"] for l in self.step_lines(g)], [1, 2, 4, 6, 7, 9, 10, 3, 5, 8])
 
-    def test_source_labels(self):
+    def test_cautions_in_plain_words(self):
         g = self.game(data_source=data_file())
         st = self.steps(g)
-        self.assertEqual((st["t-boar"]["tag"], st["t-boar"]["source"]), ("Forever", "Source: Forever site: page"))
-        self.assertEqual((st["t-lw60"]["tag"], st["t-lw60"]["source"]), ("Original", "Original-game source: Old wiki: page"))
-        self.assertEqual(st["t-eat"]["tag"], "Judgment")
-        self.assertEqual(st["t-odd"]["tag"], "Unverified")
-        self.assertEqual(st["t-first"]["tag"], "Game")
+        self.assertEqual(st["t-lw60"]["caution"], "From the original game. Not confirmed for Forever.")
+        self.assertEqual(st["t-odd"]["caution"], "Not verified yet.")
+        for key in ("t-boar", "t-first", "t-eat"):          # Forever source, game data, judgment: nothing to say
+            self.assertNotIn("caution", st[key])
+        self.assertEqual(st["t-boar"]["source"], "Source: Forever site: page")
+        self.assertEqual(st["t-lw60"]["source"], "Source: Old wiki: page")
+
+    def test_an_original_game_source_gets_the_caution_whatever_the_tag(self):
+        plan = json.loads(json.dumps(PLAN))
+        plan["characters"]["Testchar"]["next"].append(
+            {"id": "t-mixed", "title": "Train Journeyman", "tag": "lookup", "source": "old"})
+        g = self.game(data_source=data_file(plan))
+        self.assertEqual(self.steps(g)["t-mixed"]["caution"], "From the original game. Not confirmed for Forever.")
 
     def test_steps_update_as_you_play(self):
         g = self.game(data_source=data_file())
@@ -125,7 +134,7 @@ class Content(PanelTest):
         prof = m["sections"]["professions"]
         self.assertEqual(prof[0]["title"], "Leatherworking 50/75")
         self.assertEqual(prof[1]["title"], "Next: Train Journeyman in Testtown.")
-        self.assertEqual(prof[1]["source"], "Original-game source: Old wiki: page")
+        self.assertEqual((prof[1]["source"], prof[1]["caution"]), ("Source: Old wiki: page", "From the original game. Not confirmed for Forever."))
         self.assertFalse(m["sections"]["gear"][0]["done"])
         self.assertEqual(m["sections"]["talents"][0]["title"], "5 points in Marksmanship.")
         self.assertEqual(m["bagsNote"], "Two free slots in the pouch.")
@@ -167,9 +176,10 @@ class Window(PanelTest):
         f = self.open(g)
         self.assertTrue(f.shown)
         rows = to_py(f.lastRows)
-        self.assertEqual((rows[0]["text"], rows[0]["tag"]), ("1. Equip the Hunting Bow", "Game"))
-        self.assertNotIn("sub", rows[0])                     # one line per step until clicked
-        self.assertTrue(rows[2]["done"])
+        self.assertEqual((rows[0]["style"], rows[0]["text"]), ("progress", "3 of 10 done"))
+        self.assertEqual(rows[1]["text"], "1. Equip the Hunting Bow")
+        self.assertTrue(rows[1]["isNext"])
+        self.assertNotIn("sub", rows[1])                     # one line per step until clicked
         self.assertEqual(f.headline.text, "Level 20 hunter.")   # first sentence of the full headline
         self.assertTrue(f.footer.text.startswith("Snapshot "))
         self.assertNotIn("Bags", f.footer.text)
@@ -331,19 +341,30 @@ class DataFile(PanelTest):
 class Readability(PanelTest):
     """Issue #6: bigger, larger text, one line per step, nothing clipped or overlapping."""
 
-    def test_default_size_and_minimum(self):
+    def test_default_size_fits_the_do_next_tab(self):
         g = self.game(data_source=data_file())
         f = self.open(g)
-        self.assertEqual((f.width, f.height), (900, 700))
+        self.assertEqual(f.width, 780)
+        self.assertEqual(f.height, 200 + 16 * 28)            # 16 rows in Do next
         g.lua.execute('local f = AICompanionPanel f:SetSize(300, 200) f.scripts.OnDragStop(f)')
-        self.assertEqual((g.db()["panel"]["width"], g.db()["panel"]["height"]), (640, 480))
+        self.assertEqual((g.db()["panel"]["width"], g.db()["panel"]["height"]), (560, 360))
+
+    def test_default_size_limits(self):
+        g = self.game(data_source=OLD_DATA_FILE)
+        self.assertEqual(self.open(g).height, 360)          # no plan: the minimum
+        plan = json.loads(json.dumps(PLAN))
+        plan["characters"]["Testchar"]["next"] = [{"id": "s%d" % i, "title": "Step %d" % i} for i in range(60)]
+        g = self.game(data_source=data_file(plan))
+        self.assertEqual(self.open(g).height, 700)          # long plan: at most 700, then it scrolls
 
     def test_text_sizes(self):
         g = self.game(data_source=data_file())
         self.open(g)
         fonts = to_py(g.lua.eval('''(function()
             local out = {}
-            for _, r in ipairs(Mock.regions) do if r.kind == "FontString" then out[#out + 1] = tostring(r.font) end end
+            for _, r in ipairs(Mock.regions) do
+                if r.kind == "FontString" and not rawget(r, "fromTemplate") then out[#out + 1] = tostring(r.font) end
+            end
             return out end)()'''))
         self.assertTrue(fonts)
         small = [f for f in fonts if "Small" in f or "Tiny" in f]
@@ -367,23 +388,30 @@ class Readability(PanelTest):
     def test_clicking_a_row_toggles_it(self):
         g = self.game(data_source=data_file())
         f = self.open(g)
-        click_first = '''
+        click_first_step = '''
             local list
             for _, fr in ipairs(Mock.frames) do if fr.kind == "ScrollFrame" then list = fr.scrollChild end end
             for _, fr in ipairs(Mock.frames) do
-                if fr.kind == "Button" and fr.parent == list and fr.shown then fr.scripts.OnClick(fr) break end
+                if fr.kind == "Button" and fr.parent == list and fr.shown and rawget(fr.title, "text") == "1. Equip the Hunting Bow" then
+                    fr.scripts.OnClick(fr) break end
             end'''
-        g.lua.execute(click_first)
-        self.assertEqual(to_py(f.lastRows)[0]["sub"], "5.7 DPS.")
-        g.lua.execute(click_first)
-        self.assertNotIn("sub", to_py(f.lastRows)[0])
+        g.lua.execute(click_first_step)
+        self.assertEqual(to_py(f.lastRows)[1]["sub"], "5.7 DPS.")
+        g.lua.execute(click_first_step)
+        self.assertNotIn("sub", to_py(f.lastRows)[1])
 
-    def test_short_tags_with_colours(self):
+    def test_no_tags_in_any_list(self):
         g = self.game(data_source=data_file())
         f = self.open(g)
-        tags = {r["key"]: (r.get("tag"), r.get("tagColor")) for r in to_py(f.lastRows) if r.get("check")}
-        self.assertEqual(tags["t-bow"], ("Game", "66dd66"))
-        self.assertEqual(tags["t-lw60"], ("Original", "ffaa44"))
+        for key in ("next", "questing", "professions", "gear", "talents", "items"):
+            self.panel(g).select(key)
+            self.assertEqual([r for r in to_py(f.lastRows) if "tag" in r], [], key)
+        texts = " ".join(t for t in to_py(g.lua.eval('''(function() local o = {}
+            for _, r in ipairs(Mock.regions) do if r.kind == "FontString" and rawget(r, "text") then o[#o + 1] = r.text end end
+            return o end)()''')) if t)
+        for word in ("Original", "Forever", "Judgment", "Unverified"):
+            self.assertNotIn(">" + word, texts)
+            self.assertNotIn(word + "|r", texts)
 
     def test_short_headline_wins(self):
         plan = json.loads(json.dumps(PLAN))
@@ -479,3 +507,83 @@ class RoundButton(PanelTest):
         g = self.game(data_source=data_file())
         self.assertTrue(g.lua.eval("AICompanionMinimapButton.parent == Minimap"))
         self.assertEqual(g.lua.eval("AICompanionMinimapButton.strata"), "MEDIUM")
+
+
+class NativeWindow(PanelTest):
+    """Issue #12: looks like part of the game."""
+
+    def test_uses_the_clients_window_and_tabs(self):
+        g = self.game(data_source=data_file())
+        f = self.open(g)
+        self.assertEqual(g.db()["panelFrame"], "ButtonFrameTemplate, native tabs")
+        self.assertEqual(f.template, "ButtonFrameTemplate")
+        self.assertEqual(f.title, "AI Companion: Testchar")
+        self.assertFalse(f.portraitShown)
+        tabs = to_py(g.lua.eval("(function() local o = {} for i, t in ipairs(AICompanionPanel.Tabs) do o[i] = { t.template, t.text } end return o end)()"))
+        self.assertEqual([t[0] for t in tabs], ["PanelTabButtonTemplate"] * 6)
+        self.assertEqual([t[1] for t in tabs], ["Do next", "Questing", "Professions", "Gear", "Talents", "Items"])
+        first = g.lua.eval("AICompanionPanel.Tabs[1].point")
+        self.assertEqual((first[1], first[3]), ("TOPLEFT", "BOTTOMLEFT"))   # along the bottom edge
+        self.assertTrue(g.lua.eval("AICompanionPanel.Tabs[1].selected"))
+        self.panel(g).select("gear")
+        self.assertTrue(g.lua.eval("AICompanionPanel.Tabs[4].selected"))
+        self.assertFalse(g.lua.eval("AICompanionPanel.Tabs[1].selected"))
+
+    def test_close_button_of_the_window(self):
+        g = self.game(data_source=data_file())
+        f = self.open(g)
+        f.CloseButton.scripts.OnClick(f.CloseButton)
+        self.assertFalse(f.shown)
+
+    def test_falls_back_when_the_templates_are_missing(self):
+        w = W.world()
+        w["noFrameTemplates"] = True
+        g = self.game(w, data_source=data_file())
+        f = self.open(g)
+        self.assertEqual(g.db()["panelFrame"], "plain, plain tabs")
+        self.assertTrue(f.shown)
+        self.assertEqual(to_py(f.lastRows)[1]["text"], "1. Equip the Hunting Bow")
+        self.panel(g).select("items")
+        self.assertEqual(to_py(f.lastRows)[0]["text"], "Sell to vendor")
+
+    def test_next_step_stands_out_and_done_steps_recede(self):
+        g = self.game(data_source=data_file())
+        f = self.open(g)
+        rows = to_py(f.lastRows)
+        self.assertEqual([r["text"] for r in rows if r.get("isNext")], ["1. Equip the Hunting Bow"])
+        styles = [r["style"] for r in rows]
+        divider = styles.index("divider")
+        self.assertEqual(rows[divider]["text"], "Done")
+        self.assertTrue(all(r.get("done") for r in rows[divider + 1:divider + 4]))
+        self.assertFalse(any(r.get("done") for r in rows[:divider]))
+        shown = to_py(g.lua.eval('''(function() local o = {}
+            for _, fr in ipairs(Mock.frames) do
+                if fr.kind == "Button" and fr.bg and fr.shown and fr.bg.shown then o[#o + 1] = fr.title.text end
+            end return o end)()'''))
+        self.assertEqual(shown, ["1. Equip the Hunting Bow"])   # only the next step is highlighted
+
+    def test_headings_are_never_larger_than_step_titles(self):
+        g = self.game(data_source=data_file())
+        self.open(g)
+        fonts = to_py(g.lua.eval('''(function() local o = {}
+            for _, fr in ipairs(Mock.frames) do
+                if fr.kind == "Button" and fr.title and fr.shown then o[#o + 1] = { fr.title.text, fr.title.font, fr.title.wordWrap } end
+            end return o end)()'''))
+        by_text = {t: (font, wrap) for t, font, wrap in fonts}
+        self.assertEqual(by_text["Bags"][0], "GameFontNormal")
+        self.assertEqual(by_text["1. Equip the Hunting Bow"][0], "GameFontHighlightLarge")
+        self.assertTrue(by_text["Two free slots in the pouch."][1])     # notes wrap, never cut off
+        self.assertNotIn("GameFontNormalHuge", [f for _, f, _ in fonts])
+
+    def test_expand_arrow_and_detail(self):
+        g = self.game(data_source=data_file())
+        f = self.open(g)
+        arrow = lambda: g.lua.eval('''(function()
+            for _, fr in ipairs(Mock.frames) do
+                if fr.kind == "Button" and fr.title and rawget(fr.title, "text") == "6. Leatherworking 60" then return fr.arrow.texture end
+            end end)()''')
+        self.assertEqual(arrow(), "Interface\\Buttons\\UI-PlusButton-Up")
+        self.panel(g).expand("t-lw60")
+        self.assertEqual(arrow(), "Interface\\Buttons\\UI-MinusButton-Up")
+        row = next(r for r in to_py(f.lastRows) if r["key"] == "t-lw60")
+        self.assertEqual(row["sub"], "From the original game. Not confirmed for Forever.\nSource: Old wiki: page")
