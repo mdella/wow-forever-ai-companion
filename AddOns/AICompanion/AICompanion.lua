@@ -3,11 +3,13 @@
 -- on /reload or logout) so an out-of-game AI companion can read it.
 -- It never automates gameplay: it only reads data the game already shows you.
 
-local ADDON_NAME = ...
-local VERSION = "0.8.1"
+local ADDON_NAME, ns = ...
+ns = type(ns) == "table" and ns or {}
+local VERSION = "0.10.3"
 local PREFIX = "|cff66ccffAI Companion|r: "
 
 local DB            -- AICompanionDB once loaded
+local note          -- note(what): remember the add-on's last action (defined with say below)
 local charKey       -- "Name@Realm"
 local lastSnapshotAt = 0
 local dirty, pending = false, false
@@ -701,6 +703,7 @@ local function takeSnapshot(reason)
         DB.lastSkipped = { atText = date("%Y-%m-%d %H:%M:%S"), reason = reason, why = "character data not loaded" }
         return nil
     end
+    if note then note("snapshot (" .. tostring(reason) .. ")") end
     local store = charStore()
     local old = store.snapshot
     local snap = {
@@ -1020,6 +1023,11 @@ end
 
 local function say(msg) print(PREFIX .. msg) end
 
+-- What the add-on did last, kept so a blocked action can be traced from the saved file.
+local lastAction = "nothing yet"
+note = function(what) lastAction = tostring(what) .. " at " .. date("%H:%M:%S") end
+
+
 
 -------------------------------------------------------------------------------
 -- Auction house price checks
@@ -1225,26 +1233,38 @@ local function ahStart()
     ahNext()
 end
 
+-- The "check prices" button: the add-on's own frame on UIParent, placed under the auction
+-- window's bottom right by reading the window's position. It is not a child of, anchored to,
+-- or written onto the game's auction window, so it cannot taint buying or bidding.
 local ahButton
+local function placeAhButton()
+    local w = AuctionHouseFrame or AuctionFrame
+    local right, bottom = w and w:GetRight(), w and w:GetBottom()
+    if not (right and bottom) then ahButton:Hide() return end
+    local scale = (w:GetEffectiveScale() or 1) / (UIParent:GetEffectiveScale() or 1)
+    ahButton:ClearAllPoints()
+    ahButton:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", right * scale - 4, bottom * scale - 4)
+    ahButton:Show()
+end
+
 local function ahShow()
-    if ahButton then ahButton:Show() return end
-    local parent = AuctionHouseFrame or AuctionFrame
-    if not parent then return end
     local ok, err = pcall(function()
-        local b = CreateFrame("Button", "AICompanionAuctionButton", parent, "UIPanelButtonTemplate")
-        b:SetSize(230, 24)
-        -- The Buy / Sell / Auctions tabs hang below the left of the window, so sit at the bottom right.
-        b:SetPoint("TOPRIGHT", parent, "BOTTOMRIGHT", -4, -4)
-        b:SetFrameStrata("HIGH")
-        b:SetText("AI Companion: check prices")
-        b:SetScript("OnClick", function() local okStart, e = pcall(ahStart) if not okStart then say("auction check failed: " .. tostring(e)) end end)
-        ahButton = b
+        if not ahButton then
+            local b = CreateFrame("Button", "AICompanionAuctionButton", UIParent, "UIPanelButtonTemplate")
+            b:SetSize(230, 24)
+            b:SetFrameStrata("HIGH")
+            b:SetText("AI Companion: check prices")
+            b:SetScript("OnClick", function() local okStart, e = pcall(ahStart) if not okStart then say("auction check failed: " .. tostring(e)) end end)
+            ahButton = b
+        end
+        placeAhButton()
     end)
     if not ok and DB then DB.lastEventError = "auction button: " .. tostring(err) end
     say("auction house open. Click 'AI Companion: check prices' below the right corner of the window, or type /aic ah.")
 end
 
 local function ahClosed()
+    if ahButton then ahButton:Hide() end
     if ah.running then ahFinish("stopped early because the window closed") end
 end
 
@@ -1313,9 +1333,9 @@ local function ruleFor(name)
     local st = DB.characters and DB.characters[charKey]
     local snap = type(st) == "table" and st.snapshot or nil
     if type(snap) ~= "table" then return nil end
-    if not ruleCache or ruleCacheAt ~= snap.takenAt then
+    if not ruleCache or ruleCacheAt ~= snap then
         local ok, out = pcall(Rules.adviseAll, DB, charKey)
-        ruleCache, ruleCacheAt = (ok and type(out) == "table") and out or {}, snap.takenAt
+        ruleCache, ruleCacheAt = (ok and type(out) == "table") and out or {}, snap
     end
     local a = ruleCache[name]
     if type(a) ~= "table" then return nil end
@@ -1376,6 +1396,251 @@ local function hookTooltips()
     return false, "no tooltip hook available"
 end
 
+
+-------------------------------------------------------------------------------
+-- Bag sort by recommended action
+-- Groups the items in the ordinary bags by what to do with them, one swap at a time,
+-- waiting for the game to confirm each move. Special bags (quiver, ammo pouch, reagent
+-- bag) are left alone. It stops, with nothing lost, if the bags change under it.
+-------------------------------------------------------------------------------
+
+local SORT_GROUP = { sell = 1, auction = 2, mail = 3, bank = 4, use = 5, craft = 6, quest = 7, carry = 8, keep = 8 }
+local sorter = { running = false }
+local sortStep, sortStart   -- defined below; declared first because they and the bag button refer to each other
+
+local function sortSlots()
+    local slots = {}
+    for bag = 0, math.min(lastPlayerBag(), 4) do
+        local n = try(C_Container.GetContainerNumSlots, bag)
+        local _, family = try(C_Container.GetContainerNumFreeSlots, bag)
+        if type(n) == "number" and n > 0 and (family == nil or family == 0) then
+            for slot = 1, n do slots[#slots + 1] = { bag = bag, slot = slot } end
+        end
+    end
+    return slots
+end
+
+local function slotItem(p)
+    local info = try(C_Container.GetContainerItemInfo, p.bag, p.slot)
+    if type(info) ~= "table" or info.itemID == nil or isSecret(info.itemID) then return false, false, nil end
+    return info.itemID, info.isLocked == true, info
+end
+
+-- The item ID each slot should hold once sorted, or false for an empty slot.
+local function sortTarget(slots)
+    local items = {}
+    for _, p in ipairs(slots) do
+        local id, _, info = slotItem(p)
+        if id then
+            local name = info.itemName or (C_Item and try(C_Item.GetItemNameByID, id))
+            if type(name) ~= "string" or isSecret(name) then name = nil end
+            local action = adviceFor(name)
+            if not action then action = ruleFor(name) end
+            items[#items + 1] = { id = id, name = name or "", group = SORT_GROUP[action] or 9 }
+        end
+    end
+    table.sort(items, function(a, b)
+        if a.group ~= b.group then return a.group < b.group end
+        if a.name ~= b.name then return a.name < b.name end
+        return a.id < b.id
+    end)
+    local want = {}
+    for i = 1, #slots do want[i] = items[i] and items[i].id or false end
+    return want
+end
+
+local function itemLabel(id)
+    if not id then return "empty" end
+    local n = C_Item and try(C_Item.GetItemNameByID, id)
+    if type(n) == "string" and not isSecret(n) then return n end
+    return "item " .. tostring(id)
+end
+
+local function slotLabel(p) return ("bag %d slot %d"):format(p.bag, p.slot) end
+
+local function sortDebug()
+    DB.sortDebug = type(DB.sortDebug) == "table" and DB.sortDebug or {}
+    return DB.sortDebug
+end
+
+local function sortStop(message, detail)
+    sorter.running = false
+    if try(CursorHasItem) then try(ClearCursor) end   -- puts a held item back where it came from
+    sortDebug().lastStop = { atText = date("%Y-%m-%d %H:%M:%S"), message = message, detail = detail, moves = sorter.moves }
+    say(message .. (detail and (" (" .. detail .. ")") or ""))
+end
+
+local SORT_TICK, SORT_GRACE, SORT_CONFIRM_TIMEOUT = 0.1, 10, 5
+
+local function sortLater() C_Timer.After(SORT_TICK, sortStep) end
+
+-- A move is pending from the moment it is made until both of its slots show their new
+-- contents and are unlocked. Until then each of the two slots may read as before or after
+-- the move: the server confirms them separately. Any other difference is a real change, and
+-- gets SORT_GRACE re-reads (about a second) before the sort gives up.
+sortStep = function()
+    if not sorter.running then return end
+    if InCombatLockdown and InCombatLockdown() then return sortStop("bag sort stopped: you entered combat. Nothing was lost.") end
+    local slots, model, want, pend = sorter.slots, sorter.model, sorter.want, sorter.pending
+    if try(CursorHasItem) then return sortStop("bag sort stopped: something is on your cursor. Nothing was lost.") end
+    local now = GetTime()
+    local read, anyLocked, mismatch = {}, false, nil
+    for i, p in ipairs(slots) do
+        local id, locked = slotItem(p)
+        read[i] = { id = id, locked = locked }
+        if locked then anyLocked = true end
+        local ok
+        if pend and (i == pend.i or i == pend.j) then
+            -- written out: "x and a or b" picks b when a is false (an empty slot)
+            local before, after
+            if i == pend.i then before, after = pend.oldI, pend.oldJ else before, after = pend.oldJ, pend.oldI end
+            ok = id == before or id == after
+        else
+            ok = id == model[i]
+        end
+        if not ok and not mismatch then mismatch = { p = p, expected = model[i], found = id } end
+    end
+    if mismatch then
+        sorter.grace = sorter.grace + 1
+        if sorter.grace <= SORT_GRACE then return sortLater() end
+        return sortStop("bag sort stopped: your bags changed while sorting. Nothing was lost; sort again.",
+            ("%s: expected %s, found %s"):format(slotLabel(mismatch.p), itemLabel(mismatch.expected), itemLabel(mismatch.found)))
+    end
+    sorter.grace = 0
+    if pend then
+        local ri, rj = read[pend.i], read[pend.j]
+        if not (ri.id == pend.oldJ and rj.id == pend.oldI and not ri.locked and not rj.locked) then
+            if now - pend.at > SORT_CONFIRM_TIMEOUT then
+                return sortStop("bag sort stopped: the game did not confirm a move. Nothing was lost.",
+                    ("%s to %s"):format(itemLabel(pend.oldJ), slotLabel(slots[pend.i])))
+            end
+            return sortLater()
+        end
+        model[pend.i], model[pend.j] = pend.oldJ, pend.oldI
+        sorter.pending, sorter.moves, sorter.pos = nil, sorter.moves + 1, pend.i + 1
+    end
+    if anyLocked then
+        sorter.waits = sorter.waits + 1
+        if sorter.waits * SORT_TICK > SORT_CONFIRM_TIMEOUT then return sortStop("bag sort stopped: an item stayed locked. Nothing was lost.") end
+        return sortLater()
+    end
+    sorter.waits = 0
+    for i = sorter.pos, #slots do
+        if not want[i] then break end
+        if model[i] ~= want[i] then
+            -- take the wanted item from a later slot, preferring one that is itself out of place
+            local j
+            for k = i + 1, #slots do
+                if model[k] == want[i] and model[k] ~= want[k] then j = k break end
+            end
+            if not j then
+                for k = i + 1, #slots do
+                    if model[k] == want[i] then j = k break end
+                end
+            end
+            if not j then return sortStop("bag sort stopped: lost track of an item. Nothing was lost; sort again.", itemLabel(want[i])) end
+            -- model[i] and model[j] differ, so this is a move or a swap, never a stack merge
+            note(("sort: moving %s to %s"):format(itemLabel(model[j]), slotLabel(slots[i])))
+            try(C_Container.PickupContainerItem, slots[j].bag, slots[j].slot)
+            try(C_Container.PickupContainerItem, slots[i].bag, slots[i].slot)
+            if not sorter.running then return end   -- the game forbade the move
+            if try(CursorHasItem) then
+                return sortStop("bag sort stopped: the game refused a move. Nothing was lost.",
+                    ("%s to %s"):format(itemLabel(model[j]), slotLabel(slots[i])))
+            end
+            sorter.pending = { i = i, j = j, oldI = model[i], oldJ = model[j], at = now }
+            return sortLater()
+        end
+    end
+    sorter.running = false
+    sortDebug().lastRun = { atText = date("%Y-%m-%d %H:%M:%S"), moves = sorter.moves, slots = #slots }
+    say(("bags sorted by advice in %d moves: sell, auction, mail, bank, use, craft, quest, keep, then the rest."):format(sorter.moves))
+end
+
+-- The "Sort by advice" button. It is the add-on's own frame on UIParent, never a child of,
+-- anchored to, or written onto the game's bag windows: touching those taints the bag item
+-- buttons, and the game then blocks using an item from the bags (issue #15). It follows the
+-- bag window by reading its position a few times a second, and nothing runs when bags open.
+local sortButton, followTicker, followed
+local BAG_WINDOWS = { "ContainerFrameCombinedBags", "ContainerFrame1" }
+
+local function openBagWindow()
+    for _, name in ipairs(BAG_WINDOWS) do
+        local f = _G[name]
+        if type(f) == "table" and type(f.IsShown) == "function" and f:IsShown() then return f, name end
+    end
+end
+
+local function placeSortButton()
+    if not sortButton then return end
+    local f, name = openBagWindow()
+    local right, top = f and f:GetRight(), f and f:GetTop()
+    if not (right and top) then
+        if sortButton:IsShown() then sortButton:Hide() end
+        followed = nil
+        return
+    end
+    local scale = (f:GetEffectiveScale() or 1) / (UIParent:GetEffectiveScale() or 1)
+    sortButton:ClearAllPoints()
+    sortButton:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMLEFT", right * scale - 4, top * scale + 2)
+    if not sortButton:IsShown() then sortButton:Show() end
+    if followed ~= name then followed = name note("sort button over " .. name) end
+end
+
+local function makeSortButton()
+    if sortButton then return end
+    local b = CreateFrame("Button", "AICompanionSortButton", UIParent, "UIPanelButtonTemplate")
+    b:SetSize(120, 20)
+    b:SetFrameStrata("HIGH")
+    b:SetText("Sort by advice")
+    b:SetScript("OnClick", function() local ok, e = pcall(sortStart) if not ok then say("bag sort failed: " .. tostring(e)) end end)
+    b:Hide()
+    sortButton = b
+    if C_Timer and C_Timer.NewTicker then
+        followTicker = C_Timer.NewTicker(0.25, function() pcall(placeSortButton) end)
+    end
+end
+
+sortStart = function()
+    if not DB or not charKey then return end
+    if InCombatLockdown and InCombatLockdown() then say("can't sort bags in combat.") return end
+    if sorter.running then say("already sorting your bags.") return end
+    if not (C_Container and C_Container.PickupContainerItem) then say("this client does not let add-ons move items.") return end
+    if try(CursorHasItem) then say("put down the item on your cursor first, then sort again.") return end
+    takeSnapshot("sort")
+    local slots = sortSlots()
+    local model = {}
+    for i, p in ipairs(slots) do
+        local id, locked = slotItem(p)
+        if locked then say("an item is still moving; try again in a moment.") return end
+        model[i] = id
+    end
+    sorter = { running = true, slots = slots, model = model, want = sortTarget(slots), pos = 1, moves = 0, waits = 0, grace = 0 }
+    sortStep()
+end
+
+local function sortDebugReport()
+    local d = sortDebug()
+    local found = {}
+    for _, name in ipairs(BAG_WINDOWS) do
+        local f = _G[name]
+        if type(f) == "table" then found[#found + 1] = name .. ((type(f.IsShown) == "function" and f:IsShown()) and " (open)" or " (closed)") end
+    end
+    d.bagWindows, d.buttonOver = found, followed
+    say("bag windows: " .. (#found > 0 and table.concat(found, ", ") or "none found"))
+    say("sort button: " .. (followed and ("shown above " .. followed) or "hidden (no bag window open)"))
+    local blocked = DB.blockedActions
+    if type(blocked) == "table" and #blocked > 0 then
+        local b = blocked[#blocked]
+        say(("last blocked action %s: %s (%s), add-on was doing: %s"):format(tostring(b.atText), tostring(b.func), tostring(b.event), tostring(b.lastAction)))
+    end
+    local st = d.lastStop
+    if type(st) == "table" then say("last stop " .. tostring(st.atText) .. ": " .. tostring(st.message) .. (st.detail and (" (" .. st.detail .. ")") or "")) end
+    local run = d.lastRun
+    if type(run) == "table" then say("last full sort " .. tostring(run.atText) .. ": " .. tostring(run.moves) .. " moves.") end
+    say("saved for your companion at your next /aic save.")
+end
+
 local function countErrors(snap)
     local n = 0
     for _ in pairs(snap.errors or {}) do n = n + 1 end
@@ -1418,6 +1683,10 @@ local function handleSlash(msg)
         say("question noted. Type /aic save to send it with a fresh snapshot.")
     elseif cmd == "ah" or cmd == "auction" then
         ahStart()
+    elseif cmd == "sort" then
+        if rest:lower() == "debug" then sortDebugReport() else sortStart() end
+    elseif cmd == "panel" then
+        if ns.panel and ns.panel.toggle then ns.panel.toggle() else say("the panel is not loaded; restart the game once after updating.") end
     elseif cmd == "probe" then
         local ok, res = pcall(probeAPI)
         if ok then DB.apiProbe = clean(res) say("interface probe stored (" .. #res.namespaces .. " namespaces).")
@@ -1429,8 +1698,20 @@ local function handleSlash(msg)
         print("  /aic copy       show a text summary you can copy and paste")
         print("  /aic ask <q>    note a question for your companion")
         print("  /aic ah         at an auctioneer: check prices for your bags, bank and shopping list")
+        print("  /aic sort       group your bags by advice: sell, auction, mail, bank, use, craft, quest, keep")
+        print("  /aic panel      open or close your companion panel (also the minimap button)")
+        print("  /aic sort debug what the bag sort found, and why it last stopped")
     end
 end
+
+-- What AICompanion_Panel.lua needs from this file.
+ns.core = {
+    db = function() return DB end,
+    charKey = function() return charKey end,
+    adviceFor = adviceFor, ruleFor = ruleFor, say = say, try = try, isSecret = isSecret,
+    takeSnapshot = function(reason) return takeSnapshot(reason) end,
+    ADVICE_LABEL = ADVICE_LABEL,
+}
 
 SLASH_AICOMPANION1 = "/aic"
 SLASH_AICOMPANION2 = "/companion"
@@ -1467,6 +1748,7 @@ end
 
 function handlers.PLAYER_LOGIN()
     if not DB then return end
+    pcall(makeSortButton)
     local name = UnitName("player") or "Unknown"
     local realm = try(GetRealmName) or "Unknown"
     charKey = name .. "@" .. realm
@@ -1502,6 +1784,28 @@ handlers.TRAINER_SHOW = function() C_Timer.After(0.5, function() pcall(captureTr
 handlers.MERCHANT_SHOW = function() C_Timer.After(0.5, function() pcall(captureMerchant) end) end
 handlers.TAXIMAP_OPENED = function() C_Timer.After(0.5, function() pcall(captureTaxi) end) end
 handlers.TRADE_SKILL_LIST_UPDATE = function() pcall(captureRecipes) end
+handlers.PLAYER_REGEN_DISABLED = function() if sorter.running then sortStop("bag sort stopped: you entered combat. Nothing was lost.") end end
+-- The game blocked or forbade something it blames on this add-on. Keep a record in the saved
+-- file (the last 20) so the cause can be traced, and say so once per session.
+local blockedSaid = false
+local function recordBlocked(event, addon, func)
+    if addon ~= ADDON_NAME or not DB then return end
+    DB.blockedActions = type(DB.blockedActions) == "table" and DB.blockedActions or {}
+    local list = DB.blockedActions
+    list[#list + 1] = { atText = date("%Y-%m-%d %H:%M:%S"), event = event, func = tostring(func),
+                        inCombat = (InCombatLockdown and InCombatLockdown()) == true, lastAction = lastAction,
+                        addonVersion = VERSION }
+    while #list > 20 do table.remove(list, 1) end
+    if not blockedSaid then
+        blockedSaid = true
+        say("the game blocked " .. tostring(func) .. ". Recorded for your companion; type /aic save to send it.")
+    end
+end
+handlers.ADDON_ACTION_FORBIDDEN = function(addon, func)
+    recordBlocked("ADDON_ACTION_FORBIDDEN", addon, func)
+    if addon == ADDON_NAME and sorter.running then sortStop("bag sort stopped: the game does not let add-ons move items here.") end
+end
+handlers.ADDON_ACTION_BLOCKED = function(addon, func) recordBlocked("ADDON_ACTION_BLOCKED", addon, func) end
 handlers.AUCTION_HOUSE_SHOW = ahShow
 handlers.AUCTION_HOUSE_CLOSED = ahClosed
 handlers.AUCTION_HOUSE_BROWSE_RESULTS_UPDATED = ahBrowseResults
