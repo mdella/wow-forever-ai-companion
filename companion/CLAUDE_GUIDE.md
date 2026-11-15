@@ -75,6 +75,7 @@ Known limits:
 | `/aic ah age <days>` | With Auctionator: how many days its prices count as fresh (default 5). |
 | `/aic sort` | Groups the bags by advice: sell, auction, mail, bank, use, craft, quest, keep, then the rest. Also a "Sort by advice" button above the bag window. |
 | `/aic panel` | Opens the companion panel: this character's plan, with self-ticking steps. Also the minimap button. |
+| Key binding | Key Bindings > AddOns > AI Companion > "Open or close the panel". The player picks the key; none is set by default. |
 | `/aic sort debug` | What the bag sort found (bag windows, button) and why it last stopped. Saved in `AICompanionDB.sortDebug` for you to read. |
 | `/aic copy` | Text summary the player can paste into chat. |
 | `/aic help` | Command list. |
@@ -159,6 +160,7 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 ## Changelog
 
+- 0.11.1 — Key binding: Key Bindings > AddOns > AI Companion > "Open or close the panel". No key by default; the minimap button's tooltip names the key once one is set. Adds `Bindings.xml`: one full game restart.
 - 0.11.0 — Prices from Auctionator when the player has it, in `snapshot.auctionator`. The "check prices" button appears only when Auctionator is missing or its prices are older than `/aic ah age` (default 5 days), and `/aic ah` then checks only the rest. The add-on's own tooltip price line is left out for items Auctionator prices. Needs a full game restart once (`.toc` change).
 - 0.10.4 — Installing is one folder, `AICompanion`. `gen_data.py` creates `AICompanion_Data` and its `.toc` when missing, so an install or update can never replace the player's data. The data add-on's game version follows the installed add-on release. Snapshots record `client.dataAddon`.
 - 0.10.3 — Includes 0.9.2: using items from the bags is no longer blocked, and blocked actions are recorded in `blockedActions`. The panel's minimap button and window were checked against the same rule: they sit on the minimap edge and on UIParent and never touch a game window.

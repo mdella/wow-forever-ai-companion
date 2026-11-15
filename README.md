@@ -95,6 +95,7 @@ Keep your private `plans.json` in one persistent folder outside this repository,
 | `/aic ah age <days>` | With Auctionator: how many days its prices count as fresh (default 5). Older than that, the "check prices" button comes back. |
 | `/aic sort` | Group your bags by what to do with each item: sell, auction, mail, bank, use, craft, quest, keep. Also a "Sort by advice" button above your bags. |
 | `/aic panel` | Open your companion panel: this character's plan, inside the game. Also the book button on the minimap (drag it to move it). |
+| Key binding | Choose a key for the panel in the game's Key Bindings screen, under AddOns > AI Companion. |
 | `/aic copy` | Show a text summary you can copy and paste. |
 | `/aic help` | All commands. |
 

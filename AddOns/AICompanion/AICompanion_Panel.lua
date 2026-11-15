@@ -604,6 +604,24 @@ function Panel.toggle()
     frame:Show()   -- OnShow draws it
 end
 Panel.isShown = function() return frame ~= nil and frame:IsShown() end
+
+-- Key binding (Bindings.xml): Key Bindings > AddOns > AI Companion > "Open or close the panel".
+-- The labels are globals the Key Bindings screen reads; the binding calls the function below.
+BINDING_HEADER_AICOMPANION = "AI Companion"
+BINDING_NAME_AICOMPANION_TOGGLE_PANEL = "Open or close the panel"
+function AICompanion_TogglePanel()
+    local ok, err = pcall(Panel.toggle)
+    if not ok then say("could not open the panel: " .. tostring(err)) end
+end
+
+-- The key the player bound, as the game names it ("F8", "Shift-P"), or nil.
+function Panel.boundKey()
+    if type(GetBindingKey) ~= "function" then return nil end
+    local key = GetBindingKey("AICOMPANION_TOGGLE_PANEL")
+    if type(key) ~= "string" or key == "" then return nil end
+    local text = type(GetBindingText) == "function" and GetBindingText(key) or nil
+    return (type(text) == "string" and text ~= "") and text or key
+end
 Panel.select = function(key) current, expanded = key, nil render() end
 Panel.expand = function(key) expanded = key render() end
 
@@ -703,7 +721,8 @@ local function buildButton()
         if GameTooltip and GameTooltip.SetOwner then
             GameTooltip:SetOwner(self, "ANCHOR_LEFT")
             GameTooltip:SetText("AI Companion")
-            GameTooltip:AddLine("Click: open the plan", 1, 1, 1)
+            local key = Panel.boundKey()
+            GameTooltip:AddLine(key and ("Click or press " .. key .. ": open the plan") or "Click: open the plan", 1, 1, 1)
             GameTooltip:AddLine("Drag: move this button", 1, 1, 1)
             GameTooltip:Show()
         end

@@ -1,0 +1,6 @@
+<Bindings>
+	<!-- Key Bindings screen > AddOns > AI Companion. No key by default: the player picks one. -->
+	<Binding name="AICOMPANION_TOGGLE_PANEL" header="AICOMPANION" category="ADDONS">
+		AICompanion_TogglePanel()
+	</Binding>
+</Bindings>

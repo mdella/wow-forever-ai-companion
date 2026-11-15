@@ -300,6 +300,20 @@ end
 
 function InCombatLockdown() return W.inCombat == true end
 
+-- Key bindings. The harness registers each <Binding> of an add-on's Bindings.xml; W.bindings maps a
+-- binding name to the key the player chose in the Key Bindings screen.
+M.bindings = {}
+function M.addBinding(name, header, category, body) M.bindings[name] = { header = header, category = category, body = body } end
+function M.pressBinding(name)
+    local b = M.bindings[name]
+    if not b then error("no binding " .. tostring(name)) end
+    local chunk, err = loadstring(b.body, "binding " .. name)
+    if not chunk then lerror("binding " .. name, err) return end
+    run("binding", "binding " .. name, chunk)
+end
+function GetBindingKey(action) return (W.bindings or {})[action] end
+function GetBindingText(key) return key and (key:gsub("SHIFT%-", "Shift-")) end
+
 -- hooksecurefunc(name, fn) or hooksecurefunc(table, name, fn): run fn after the original.
 M.hooks = {}
 function hooksecurefunc(a, b, c)

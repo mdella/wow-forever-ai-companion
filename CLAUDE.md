@@ -37,6 +37,7 @@ The supported client interface is set in one place: the `FOREVER_INTERFACE` file
 - `AddOns/AICompanion/AICompanion.lua` — snapshots, window captures (bank, trainer, vendor, flight master, recipes), auction check, tooltips, `/aic` commands.
 - `AddOns/AICompanion/AICompanion_Rules.lua` — built-in item advice.
 - `AddOns/AICompanion/AICompanion_Panel.lua` — in-game panel and minimap button; reads `AICompanionPlans` from the data add-on.
+- `AddOns/AICompanion/Bindings.xml` — the Key Bindings entry for the panel. The client reads it from the folder by itself; it is not listed in the `.toc`.
 - `AddOns/AICompanion_Data/` — empty template of the per-player data add-on; on the player's PC it is created and filled by `companion/gen_data.py`.
 - `companion/` — assistant guide, data generator, dashboard builder and template, example plan.
 - `tests/` — stand-in game client, test harness, scenario and rule tests.
