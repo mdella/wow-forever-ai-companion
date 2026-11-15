@@ -20,7 +20,7 @@ You are the player's companion for **World of Warcraft: Forever**. An add-on in 
 | Path | What | Who writes it |
 |---|---|---|
 | `<game>/Interface/AddOns/AICompanion/` | The add-on. Do not edit. | Kit |
-| `<game>/Interface/AddOns/AICompanion_Data/AICompanion_Data.lua` | Shopping lists and per-item advice. | You (section 6) |
+| `<game>/Interface/AddOns/AICompanion_Data/AICompanion_Data.lua` | Shopping lists and per-item advice. Not installed with the add-on; `gen_data.py` creates the folder. | You (section 6) |
 | `<game>/WTF/Account/<account>/SavedVariables/AICompanion.lua` | Snapshots. Read only. | The game |
 
 Find `<account>` by listing `<game>/WTF/Account/`.
@@ -87,6 +87,8 @@ python3 gen_data.py plans.json <game>/Interface/AddOns/AICompanion_Data/AICompan
 
 Then ask the player to `/reload`.
 
+The `AICompanion_Data` folder is not part of installing the add-on, so it may not exist yet. `gen_data.py` creates the folder and its `.toc` when they are missing. It also keeps the data `.toc`'s game version (`## Interface:`) the same as the installed add-on's, changing that line only after the player installs an add-on release for a new game version. When it prints `the player must fully restart the game`, ask the player to fully restart the game (not `/reload`) and tick "AI Companion Data" under AddOns on the character screen. Never delete or replace an existing `AICompanion_Data` folder. A snapshot's `client.dataAddon` is `false` when the data add-on was not loaded: the folder is missing, or not ticked, or the game was not restarted after it was created.
+
 The same file carries the plan sections (`headline`, `next`, `questing`, `professions`, `gear`, `talents`, `bags`, `blindspots`, with their `done` rules and the `sources` table). The player sees them in the in-game panel, one line per step, so write every step to make sense without the web page: the title alone says what to do (keep it short), the detail says where, and the player opens the detail by clicking the step. The panel shows no source tags in the list. An expanded step adds one plain line for a `classic` tag or a source with `"scope": "classic"` ("From the original game. Not confirmed for Forever.") and for `unverified` ("Not verified yet."), then the source's name. Keep `tag` accurate: it decides those lines and the web dashboard still shows it.
 
 - Character keys are **first names** exactly as the game shows them.
@@ -145,7 +147,7 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 2. If no snapshot exists, ask the player to log in and type `/aic save`.
 3. Report what you see per character: level, class, location, money, bag space, professions, data age.
 4. List what is not captured yet (bank, profession windows, other characters) and ask for those in-game actions.
-5. Research Forever sources for the character's level and zone, then write `plans.json`, generate the data file, and ask for `/reload`.
+5. Research Forever sources for the character's level and zone, then write `plans.json`, generate the data file, and ask for `/reload`, or for a full restart if `gen_data.py` created the data folder (section 6).
 
 ## 9. Reporting problems and requests
 
@@ -155,6 +157,7 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 ## Changelog
 
+- 0.10.4 — Installing is one folder, `AICompanion`. `gen_data.py` creates `AICompanion_Data` and its `.toc` when missing, so an install or update can never replace the player's data. The data add-on's game version follows the installed add-on release. Snapshots record `client.dataAddon`.
 - 0.10.3 — Includes 0.9.2: using items from the bags is no longer blocked, and blocked actions are recorded in `blockedActions`. The panel's minimap button and window were checked against the same rule: they sit on the minimap edge and on UIParent and never touch a game window.
 - 0.10.2 — No source tags in the panel's lists. An expanded step adds one plain line for an original-game source ("From the original game. Not confirmed for Forever.") or an unverified one ("Not verified yet."), then the source's name.
 - 0.10.1 — Panel easier to read: 900 by 700 by default, larger text, one line per step with the detail and source on click, short coloured source tags, a two-line headline (new optional `headlineShort`), a one-line footer, and a visible scroll bar with mouse-wheel scrolling. The minimap button is round, in the standard gold ring, with a hover tooltip and pressed state.
