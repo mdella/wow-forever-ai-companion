@@ -8,7 +8,7 @@ It is built for **WoW: Forever** only (client interface 16001). It is not tested
 
 ## What you get
 
-| | Add-on alone | Add-on + your own Claude |
+| | Add-on alone | Add-on + your own AI companion |
 |---|---|---|
 | Character snapshots saved to disk | Yes | Yes |
 | Auction price check, with prices in item tooltips | Yes | Yes |
@@ -17,7 +17,7 @@ It is built for **WoW: Forever** only (client interface 16001). It is not tested
 | A dashboard page for all your characters | No | Yes |
 | In-game panel with your plan, steps that tick themselves as you play | Items tab only | Yes |
 
-Nothing is sent anywhere by the add-on. The game does not let add-ons use the network. Your data stays on your PC, and in your own Claude conversation if you use one.
+Nothing is sent anywhere by the add-on. The game does not let add-ons use the network. Your snapshots stay on your PC until you share them with an AI assistant. Data you share is processed by your chosen AI service. Keep snapshots and personal plans outside this public repository.
 
 ## Install
 
@@ -28,11 +28,19 @@ Nothing is sent anywhere by the add-on. The game does not let add-ons use the ne
 5. Start the game. On the character screen, open AddOns and check that "AI Companion" is ticked.
 6. Log in and type `/aic save`. The screen reloads for a second. That writes your first snapshot.
 
-If you use Claude, it creates a second folder, `AICompanion_Data`, the first time it writes advice for you. That folder holds your own advice, shopping lists and plan. Restart the game once when Claude asks, and tick "AI Companion Data" too.
+If you use an AI assistant with local file and command access, it creates a second folder, `AICompanion_Data`, the first time it writes advice for you. That folder holds your own advice, shopping lists and plan. Restart the game once when your companion asks, and tick "AI Companion Data" too.
 
 When you update later, replace only the `AICompanion` folder. Never replace or delete `AICompanion_Data`.
 
-## Use it with Claude
+## Use it with an AI companion
+
+Choose the AI assistant you prefer. The add-on saves the same snapshots and reads the same advice files regardless of provider; it needs no provider setting or API key. Claude and Codex are two options, and other assistants can use the same workflow if they have the required tools.
+
+For advice in tooltips, the in-game plan panel and a dashboard, your assistant needs local file and command access on the game computer. It reads your saved snapshots, researches Forever sources, and uses the tools in `companion/` to write your private plan and data add-on. An assistant without local tools can give advice in chat from a summary you paste with `/aic copy`.
+
+The table above describes the features available with a companion that has local tools. Use the setup section for your chosen assistant below.
+
+### Claude
 
 You need a Claude subscription and the Claude desktop app on the same computer as the game.
 
@@ -42,6 +50,40 @@ You need a Claude subscription and the Claude desktop app on the same computer a
 3. Approve the folder access Claude asks for.
 
 Claude reads your snapshot, researches Forever sources, and writes its advice into `AICompanion_Data`. Type `/reload` in the game to see it.
+
+### Codex / ChatGPT
+
+#### Codex on the game computer
+
+Use a local Codex app, CLI or IDE session with file and command tools. See [OpenAI's Codex documentation](https://learn.chatgpt.com/docs/learn/best-practices) for setup and access options.
+
+1. Open this repository folder as your Codex project or working directory. Codex reads the root `AGENTS.md`.
+2. Start a chat and say:
+   *"Be my WoW Forever companion. Read AGENTS.md and companion/CODEX_GUIDE.md. My game folder is `<path to your _forever_ folder>`. Use `<private folder outside this repository>` for my persistent plans.json. Read my latest snapshots, preserve any existing plans, and write updated advice for the game."*
+3. Grant the folder permissions Codex requests. It handles Python setup, snapshot parsing and generation, then writes advice into `AICompanion_Data`. If the data add-on does not exist, it creates it.
+4. Type `/reload` when asked, or fully restart and enable "AI Companion Data" when the data add-on is first created or its `.toc` changes.
+
+In-game advice requires local file access on the game computer. A remote Codex checkout does not have your local game files. If local tools are unavailable, use the chat workflow below.
+
+#### ChatGPT chat / Projects (advice in chat)
+
+1. Attach `companion/CODEX_GUIDE.md` to a chat, or add it as a Project file and instruct ChatGPT to follow it.
+2. In the game, type `/aic save`, then `/aic copy`. Paste the summary into chat.
+3. Say: *"Be my WoW Forever companion. Follow the attached guide in advice-only mode. Here is my saved character summary. Tell me what to do next, label sources that are unconfirmed for Forever, and tell me what information is missing."*
+
+This gives you advice in chat. Updating tooltips and the in-game panel requires a local assistant with file access. Repeat the save-and-paste step when you want updated advice. [A ChatGPT Project alone does not grant access to a folder on your PC.](https://learn.chatgpt.com/docs/projects)
+
+### Gemini
+
+Setup guide coming soon. Gemini-specific instructions have not been added or verified yet.
+
+### Other AI assistants
+
+Use an assistant with local file access and command execution for the full workflow, or paste `/aic copy` output for advice in chat. The companion guides in `companion/` document the snapshot and plan formats. Ask your assistant to follow the same Forever source checks, keep SavedVariables read-only, and preserve your private plans. Provider-specific setup may differ.
+
+### Switching between assistants
+
+Keep your private `plans.json` in one persistent folder outside this repository, and tell the new assistant where it is. Have it read that file and a fresh snapshot before updating advice, preserving all characters and step IDs. Use one assistant at a time. Keep your installed `AICompanion_Data` folder when switching.
 
 ## Commands
 
@@ -72,7 +114,7 @@ Auction 7c (2653 listed, 34m ago)          vendor 1c
 
 ## Good to know
 
-- WoW: Forever is new. Much of what is written online is about older versions of the game. The guide tells Claude to say so whenever its source is not about Forever. When the game and the advice disagree, the game is right.
+- WoW: Forever is new. Much of what is written online is about older versions of the game. The companion guides tell your assistant to say so whenever its source is not about Forever. When the game and the advice disagree, the game is right.
 - The built-in rules know item categories, not recipes. They will not tell you what to craft.
 - The add-on writes its file only on `/reload` or logout. Advice is only as fresh as your last save.
 - If you use **Auctionator**, AI Companion reads its prices, so you don't need the "check prices" button. The button only appears when Auctionator's prices are older than 5 days, or Auctionator isn't installed.
@@ -83,7 +125,9 @@ Auction 7c (2653 listed, 34m ago)          vendor 1c
 |---|---|
 | `AddOns/AICompanion/` | The add-on: `AICompanion.lua` (snapshots, auction check, tooltips) and `AICompanion_Rules.lua` (built-in advice rules). |
 | `AddOns/AICompanion_Data/` | Empty template of the data add-on, used by the tests. Not installed; your companion creates your own copy. |
-| `companion/CLAUDE_GUIDE.md` | Instructions for the assistant. |
+| `companion/CLAUDE_GUIDE.md` | Claude companion instructions. |
+| `AGENTS.md` | Shared entry point for all agents, with common rules and separate provider-specific sections. |
+| `companion/CODEX_GUIDE.md` | Optional Codex / ChatGPT setup, gameplay instructions and starting prompts. |
 | `companion/` | Tools the assistant uses: `gen_data.py` (writes the data add-on from a plan file), `build.py` and `template.html` (dashboard), `plans.example.json` (plan file format). |
 | `FOREVER_INTERFACE` | The game version the add-on supports, set in this one place. `tools/set_interface.py` copies it into the other files. |
 | `tests/` | Automated checks: the add-on run inside a stand-in game client. Run on every change. |
