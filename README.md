@@ -67,6 +67,8 @@ You need a Claude subscription and the Claude desktop app on the same computer a
 
 Claude reads your snapshot, researches Forever sources, and writes its advice into `AICompanion_Data`. Type `/reload` in the game to see it.
 
+**Optional: automatic updates.** With Claude Code installed (Pro or Max plan), your advice can update itself after you play, within a daily limit you set. Watching for changes costs nothing; only the update uses your plan. Double-click the installer for your system in `companion/auto/`. See [companion/auto/README.md](companion/auto/README.md).
+
 ### Codex / ChatGPT
 
 #### Codex on the game computer
@@ -146,6 +148,7 @@ Auction 7c (2653 listed, 34m ago)          vendor 1c
 | `AGENTS.md` | Shared entry point for all agents, with common rules and separate provider-specific sections. |
 | `companion/CODEX_GUIDE.md` | Optional Codex / ChatGPT setup and starting prompts. Points to `SKILL.md`. |
 | `companion/` | Tools the assistant uses: `gen_data.py` (writes the data add-on from a plan file), `build.py` and `template.html` (dashboard), `plans.example.json` (plan file format). |
+| `companion/auto/` | Optional automatic updates with Claude Code, for Windows and macOS: double-click installers, the shared checking logic (`core.py`) and one scheduler file per system. |
 | `FOREVER_INTERFACE` | The game version the add-on supports, set in this one place. `tools/set_interface.py` copies it into the other files. |
 | `tests/` | Automated checks: the add-on run inside a stand-in game client. Run on every change. |
 

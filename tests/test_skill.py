@@ -152,6 +152,12 @@ class OneSourceOfTruth(unittest.TestCase):
             self.assertNotRegex(guide, r"(?m)^## \d+\. ", "%s still has numbered rule sections" % name)
             self.assertEqual(sections(guide)[-1][0], "Changelog", "%s: changelog last" % name)
 
+    def test_automatic_updates_follow_the_skill(self):
+        """companion/auto hands the unattended run one guide: it must be SKILL.md, not a pointer."""
+        core = read(os.path.join(COMPANION, "auto", "core.py"))
+        named = set(re.findall(r'"([\w.-]+\.md)"', core))
+        self.assertEqual(named, {"SKILL.md"}, "the automatic run must be given SKILL.md")
+
     def test_entry_points_name_the_skill(self):
         self.assertIn("companion/SKILL.md", read(os.path.join(ROOT, "AGENTS.md")))
         readme = read(os.path.join(ROOT, "README.md"))
