@@ -109,8 +109,19 @@ local function isGuarded(f)
     return type(f) == "table" and rawget(f, "blizzard") == true and rawget(f, "allowChildren") ~= true and f ~= rawget(_G, "UIParent")
 end
 local function isBagWindow(f) return isGuarded(f) end
--- Unknown methods do nothing; unset fields read as nil through the getters above (rawget).
-Widget.__index = function(_, k) return Widget[k] or noop end
+-- Like the client: an unknown method name does nothing, an unknown field (a child frame
+-- such as .Inset or .CloseButton, a flag) is nil.
+local METHOD = { "^Set", "^Get", "^Is", "^Has", "^Can", "^Enable", "^Disable", "^Register", "^Unregister",
+    "^Create", "^Clear", "^Lock", "^Unlock", "^Start", "^Stop", "^Add", "^Hook", "^Play", "^Raise",
+    "^Lower", "^Highlight", "^Adjust", "^Update", "^Reset", "^Toggle" }
+Widget.__index = function(_, k)
+    local m = Widget[k]
+    if m ~= nil then return m end
+    if type(k) == "string" then
+        for _, pat in ipairs(METHOD) do if k:find(pat) then return noop end end
+    end
+    return nil
+end
 function Widget:SetScript(name, fn) self.scripts[name] = fn end
 function Widget:GetScript(name) return self.scripts[name] end
 function Widget:HookScript(name, fn)
@@ -178,6 +189,8 @@ function Widget:SetValue(v)
 end
 function Widget:GetValue() return rawget(self, "value") or 0 end
 function Widget:SetMaxLines(n) self.maxLines = n end
+function Widget:SetWordWrap(v) self.wordWrap = v end
+function Widget:SetRotation(r) self.rotation = r end
 function Widget:SetScrollChild(c) self.scrollChild = c end
 function Widget:SetFrameStrata(s) self.strata = s end
 function Widget:SetVerticalScroll(v) self.scrollY = v end
@@ -230,14 +243,44 @@ Widget.__newindex = function(t, k, v)
 end
 
 
+-- Templates the client provides, as far as the add-on uses them. W.noFrameTemplates makes
+-- them missing, as on a client without them (CreateFrame then raises an error).
+local TEMPLATES = {}
 function CreateFrame(kind, name, parent, template)
     if isBagWindow(parent) and not M.mockBusy then
         violation("add-on created a frame inside the game's frame " .. tostring(rawget(parent, "name")))
     end
+    if template and TEMPLATES[template] and W.noFrameTemplates then
+        error("CreateFrame: Couldn't find inherited node \"" .. template .. "\"")
+    end
     local f = M.widget(kind or "Frame", name)
     f.parent, f.template = parent, template
     M.frames[#M.frames + 1] = f
+    if template and TEMPLATES[template] then TEMPLATES[template](f) end
     return f
+end
+
+TEMPLATES.ButtonFrameTemplate = function(f)
+    f.Inset = CreateFrame("Frame", nil, f)
+    f.CloseButton = CreateFrame("Button", nil, f)
+    f.portraitShown = true
+    function f:SetTitle(t) self.title = t end
+end
+TEMPLATES.PanelTabButtonTemplate = function(b)
+    b.Text = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall2")
+    b.Text.fromTemplate = true          -- the client's own font, not the add-on's choice
+    b.Left, b.Right = b:CreateTexture(), b:CreateTexture()
+    local parent = b.parent
+    parent.Tabs = parent.Tabs or {}
+    table.insert(parent.Tabs, b)       -- parentArray="Tabs"
+end
+function ButtonFrameTemplate_HidePortrait(f) f.portraitShown = false end
+function ButtonFrameTemplate_HideButtonBar(f) f.buttonBar = false end
+function PanelTemplates_TabResize(tab) tab.resized = true end
+function PanelTemplates_SetNumTabs(f, n) f.numTabs = n end
+function PanelTemplates_SetTab(f, id)
+    f.selectedTab = id
+    for i = 1, f.numTabs or 0 do f.Tabs[i].selected = (i == id) end
 end
 
 M.mockBusy = true
