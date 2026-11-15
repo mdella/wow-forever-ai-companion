@@ -109,6 +109,7 @@ local function isGuarded(f)
     return type(f) == "table" and rawget(f, "blizzard") == true and rawget(f, "allowChildren") ~= true and f ~= rawget(_G, "UIParent")
 end
 local function isBagWindow(f) return isGuarded(f) end
+-- Unknown methods do nothing; unset fields read as nil through the getters above (rawget).
 Widget.__index = function(_, k) return Widget[k] or noop end
 function Widget:SetScript(name, fn) self.scripts[name] = fn end
 function Widget:GetScript(name) return self.scripts[name] end
@@ -120,12 +121,67 @@ function Widget:RegisterEvent(e) self.events[e] = true end
 function Widget:UnregisterEvent(e) self.events[e] = nil end
 function Widget:IsEventRegistered(e) return self.events[e] == true end
 function Widget:SetText(t) self.text = t end
-function Widget:GetText() return self.text end
-function Widget:Show() self.shown = true end
-function Widget:Hide() self.shown = false end
+function Widget:GetText() return rawget(self, "text") end
+function Widget:Show()
+    if self.shown then return end
+    self.shown = true
+    if self.scripts.OnShow then self.scripts.OnShow(self) end
+end
+function Widget:Hide()
+    if not self.shown then return end
+    self.shown = false
+    if self.scripts.OnHide then self.scripts.OnHide(self) end
+end
+function Widget:SetShown(v) if v then self:Show() else self:Hide() end end
+function Widget:SetSize(w, h) self.width, self.height = w, h end
+function Widget:SetWidth(w) self.width = w end
+function Widget:SetHeight(h) self.height = h end
+function Widget:GetWidth() return rawget(self, "width") end
+function Widget:GetHeight() return rawget(self, "height") end
+function Widget:SetPoint(...) self.point = { ... } end
+function Widget:ClearAllPoints() self.point = nil end
+function Widget:GetPoint() if self.point then
+    local p = self.point
+    if type(p[2]) == "table" then return p[1], p[2], p[3], p[4], p[5] end
+    return p[1], nil, p[1], p[2], p[3]
+end end
+function Widget:GetCenter() return 700, 500 end
+function Widget:GetEffectiveScale() return 1 end
+function Widget:SetChecked(v) self.checked = v == true end
+function Widget:GetChecked() return self.checked == true end
+function Widget:SetEnabled(v) self.enabled = v ~= false end
+function Widget:IsEnabled() return self.enabled ~= false end
 function Widget:IsShown() return self.shown == true end
-function Widget:CreateFontString() return M.widget("FontString") end
-function Widget:CreateTexture() return M.widget("Texture") end
+M.regions = {}
+local function region(kind, parent, layer, template)
+    local r = M.widget(kind)
+    r.parent, r.layer, r.template, r.font = parent, layer, template, kind == "FontString" and template or nil
+    M.regions[#M.regions + 1] = r
+    return r
+end
+function Widget:CreateFontString(name, layer, font) return region("FontString", self, layer, font) end
+function Widget:CreateTexture(name, layer) return region("Texture", self, layer) end
+function Widget:CreateMaskTexture() return region("MaskTexture", self) end
+function Widget:SetFontObject(font) self.font = font end
+function Widget:SetTexture(t) self.texture = t return true end
+function Widget:SetAtlas(a) self.atlas = a return true end
+function Widget:GetTexture() return rawget(self, "texture") end
+function Widget:AddMaskTexture(m) self.mask = m end
+function Widget:SetNormalTexture(t) self.normalTexture = t end
+function Widget:SetHighlightTexture(t) self.highlightTexture = t end
+function Widget:SetPushedTexture(t) self.pushedTexture = t end
+function Widget:SetMinMaxValues(lo, hi) self.min, self.max = lo, hi end
+function Widget:GetMinMaxValues() return rawget(self, "min") or 0, rawget(self, "max") or 0 end
+function Widget:SetValue(v)
+    self.value = v
+    if self.scripts.OnValueChanged then self.scripts.OnValueChanged(self, v) end
+end
+function Widget:GetValue() return rawget(self, "value") or 0 end
+function Widget:SetMaxLines(n) self.maxLines = n end
+function Widget:SetScrollChild(c) self.scrollChild = c end
+function Widget:SetFrameStrata(s) self.strata = s end
+function Widget:SetVerticalScroll(v) self.scrollY = v end
+function Widget:GetVerticalScroll() return rawget(self, "scrollY") or 0 end
 function Widget:Click() local f = self.scripts.OnClick if f then run("slash", "OnClick", f, self, "LeftButton") end end
 function Widget:SetPoint(...)
     local args = { ... }
@@ -137,7 +193,7 @@ function Widget:SetPoint(...)
     end
     rawset(self, "point", args)
 end
-function Widget:GetName() return self.name end
+function Widget:GetName() return rawget(self, "name") end
 function Widget:GetLeft() local r = rawget(self, "rect") return r and r.left end
 function Widget:GetBottom() local r = rawget(self, "rect") return r and r.bottom end
 function Widget:GetRight() local r = rawget(self, "rect") return r and (r.left + r.width) end
@@ -164,7 +220,8 @@ end
 local MOCK_FIELDS = {}
 for _, k in ipairs({ "kind", "name", "scripts", "events", "shown", "text", "point", "width", "height", "id",
     "parent", "template", "checked", "enabled", "texture", "value", "min", "max", "scrollY", "scrollChild",
-    "owner", "lines", "rect" }) do MOCK_FIELDS[k] = true end
+    "owner", "lines", "rect", "font", "atlas", "mask", "normalTexture", "highlightTexture", "pushedTexture",
+    "maxLines", "strata", "wordWrap" }) do MOCK_FIELDS[k] = true end
 Widget.__newindex = function(t, k, v)
     if rawget(t, "blizzard") and not M.mockBusy and not MOCK_FIELDS[k] then
         violation("add-on wrote " .. tostring(k) .. " onto the game's frame " .. tostring(rawget(t, "name")))
@@ -183,7 +240,30 @@ function CreateFrame(kind, name, parent, template)
     return f
 end
 
+M.mockBusy = true
 UIParent = M.blizzard(M.widget("Frame", "UIParent"))
+Minimap = M.blizzard(M.widget("Frame", "Minimap"))
+rawset(Minimap, "allowChildren", true)   -- minimap buttons sit on the minimap by design
+Minimap:SetSize(140, 140)
+UISpecialFrames = {}
+M.cursorX, M.cursorY = 700, 600
+function GetCursorPosition() return M.cursorX, M.cursorY end
+
+-- Art files and atlases. W.missingFiles lists paths the client lacks.
+function GetFileIDFromPath(path)
+    if (W.missingFiles or {})[path] then return nil end
+    return 100000 + #tostring(path)
+end
+C_Texture = {
+    GetAtlasInfo = function(atlas) if (W.missingFiles or {})[atlas] then return nil end return { width = 32, height = 32 } end,
+}
+
+GameTooltip = M.blizzard(M.widget("GameTooltip", "GameTooltip"))
+GameTooltip.shown = false
+function GameTooltip:SetOwner(owner) self.owner, self.lines = owner, {} end
+function GameTooltip:SetText(t) self.lines = { t } end
+function GameTooltip:AddLine(t) self.lines[#self.lines + 1] = t end
+M.mockBusy = false
 
 function M.fire(event, ...)
     for _, f in ipairs(M.frames) do

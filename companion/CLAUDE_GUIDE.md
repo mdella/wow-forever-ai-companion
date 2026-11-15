@@ -72,6 +72,7 @@ Known limits:
 | `/aic ask <question>` | Stores a question with the next save. |
 | `/aic ah` | At an auctioneer: price check of bags, bank and the shopping list. There is also a button at the bottom right of the auction window. Takes about a minute. Results reach disk at the next save. |
 | `/aic sort` | Groups the bags by advice: sell, auction, mail, bank, use, craft, quest, keep, then the rest. Also a "Sort by advice" button above the bag window. |
+| `/aic panel` | Opens the companion panel: this character's plan, with self-ticking steps. Also the minimap button. |
 | `/aic sort debug` | What the bag sort found (bag windows, button) and why it last stopped. Saved in `AICompanionDB.sortDebug` for you to read. |
 | `/aic copy` | Text summary the player can paste into chat. |
 | `/aic help` | Command list. |
@@ -85,6 +86,8 @@ python3 gen_data.py plans.json <game>/Interface/AddOns/AICompanion_Data/AICompan
 ```
 
 Then ask the player to `/reload`.
+
+The same file carries the plan sections (`headline`, `next`, `questing`, `professions`, `gear`, `talents`, `bags`, `blindspots`, with their `done` rules and the `sources` table). The player sees them in the in-game panel, one line per step, so write every step to make sense without the web page: the title alone says what to do (keep it short), the detail says where, and the player opens the detail by clicking the step. The panel shows no source tags in the list. An expanded step adds one plain line for a `classic` tag or a source with `"scope": "classic"` ("From the original game. Not confirmed for Forever.") and for `unverified` ("Not verified yet."), then the source's name. Keep `tag` accurate: it decides those lines and the web dashboard still shows it.
 
 - Character keys are **first names** exactly as the game shows them.
 - `items`: one entry per item name, `{ "action": ..., "tip": ..., "note": ... }`.
@@ -128,7 +131,7 @@ python3 -I build.py "<SavedVariables file>" plans.json template.html out/index.h
 
 It needs Python with `lupa`. Deliver the page however the player prefers (a published page or a file). Rebuild after each new snapshot.
 
-`plans.json` schema: see `plans.example.json`. Fields per character: `headline`, `next` (steps, **in the order to do them**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order.
+`plans.json` schema: see `plans.example.json`. Fields per character: `headline`, `headlineShort` (optional, at most 100 characters, written to the player as "you"; the in-game panel shows it, or else the first sentence of `headline`), `next` (steps, **in the order to do them**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order.
 
 Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (a key in `sources`) and `done`.
 
@@ -152,6 +155,10 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 ## Changelog
 
+- 0.10.3 — Includes 0.9.2: using items from the bags is no longer blocked, and blocked actions are recorded in `blockedActions`. The panel's minimap button and window were checked against the same rule: they sit on the minimap edge and on UIParent and never touch a game window.
+- 0.10.2 — No source tags in the panel's lists. An expanded step adds one plain line for an original-game source ("From the original game. Not confirmed for Forever.") or an unverified one ("Not verified yet."), then the source's name.
+- 0.10.1 — Panel easier to read: 900 by 700 by default, larger text, one line per step with the detail and source on click, short coloured source tags, a two-line headline (new optional `headlineShort`), a one-line footer, and a visible scroll bar with mouse-wheel scrolling. The minimap button is round, in the standard gold ring, with a hover tooltip and pressed state.
+- 0.10.0 — In-game companion panel: the plan for the character being played (headline, Do next, Questing, Professions, Gear, Talents, Items by action), opened from a minimap button, the add-on menu where the client has one, or `/aic panel`. Steps with a `done` rule tick themselves from the latest snapshot; the rest get a tick box. `gen_data.py` now writes the plan into the data file. Needs a full game restart once (new file).
 - 0.9.2 — Using items from the bags is no longer blocked. The "Sort by advice" and "check prices" buttons no longer attach to the game's windows; they follow them from outside, and nothing runs when bags open. Any action the game blocks is recorded in `blockedActions` (what, when, in combat or not, and what the add-on last did) and announced once in chat.
 - 0.9.1 — Bag sort works with real server timing: it waits for each move to be confirmed and accepts the in-between state of the two slots, instead of stopping at once with "your bags changed". A stop now names the bag, slot, expected and found item. `/aic sort debug` lists the bag windows found and where the button went (also saved as `sortDebug`). The button is added whenever bags are opened, not only at login.
 - 0.9.0 — `/aic sort` and a "Sort by advice" button above the bag window group the bags by action: sell, auction, mail, bank, use, craft, quest, keep, then the rest. Out of combat only; special bags untouched; stops with nothing lost if the bags change.

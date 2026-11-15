@@ -15,6 +15,7 @@ It is built for **WoW: Forever** only (client interface 16001). It is not tested
 | Rule-based item advice in tooltips (sell, keep, bank, mail to another character, equip) | Yes | Yes |
 | Advice specific to you: quests, recipes, vendors, upgrades, "craft this now" | No | Yes |
 | A dashboard page for all your characters | No | Yes |
+| In-game panel with your plan, steps that tick themselves as you play | Items tab only | Yes |
 
 Nothing is sent anywhere by the add-on. The game does not let add-ons use the network. Your data stays on your PC, and in your own Claude conversation if you use one.
 
@@ -48,6 +49,7 @@ Claude reads your snapshot, researches Forever sources, and writes its advice in
 | `/aic ask <question>` | Leave a question for your companion with the next snapshot. |
 | `/aic ah` | At an auctioneer: check prices for your bags, bank and shopping list. |
 | `/aic sort` | Group your bags by what to do with each item: sell, auction, mail, bank, use, craft, quest, keep. Also a "Sort by advice" button above your bags. |
+| `/aic panel` | Open your companion panel: this character's plan, inside the game. Also the book button on the minimap (drag it to move it). |
 | `/aic copy` | Show a text summary you can copy and paste. |
 | `/aic help` | All commands. |
 
