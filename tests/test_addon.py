@@ -841,5 +841,120 @@ class GenDataCreatesFolder(unittest.TestCase):
                          "run: python3 tools/set_interface.py")
 
 
+class WithAuctionator(GameTest):
+    """Auctionator's public functions replace the manual check while its prices are fresh."""
+
+    def ator_game(self, prices=None, default=None, api=True, raises=False):
+        """Start with a stand-in Auctionator. prices: itemID -> (copper, age in days or None)."""
+        g = Game(W.world())
+        rows = "".join("[%d] = { %d, %s }, " % (i, p, "nil" if a is None else a) for i, (p, a) in (prices or {}).items())
+        g.lua_prelude = """
+ATOR_PRICES = { %s }
+ATOR_DEFAULT = %s
+ATOR_CALLERS = {}
+local RAISES = %s
+local function lookup(caller, id, n)
+    ATOR_CALLERS[caller] = true
+    if RAISES then error("Auctionator broke") end
+    local e = ATOR_PRICES[id] or ATOR_DEFAULT
+    return e and e[n]
+end
+Auctionator = %s
+""" % (rows, "nil" if default is None else "{ %d, %d }" % default, "true" if raises else "false",
+       "{ API = { v1 = { GetAuctionPriceByItemID = function(c, id) return lookup(c, id, 1) end, "
+       "GetAuctionAgeByItemID = function(c, id) return lookup(c, id, 2) end } } }" if api else "{}")
+        self.games.append(g)
+        return g.start()
+
+    def button(self, g):
+        return g.lua.globals().AICompanionAuctionButton
+
+    def test_fresh_prices_hide_the_button_and_reach_the_snapshot(self):
+        g = self.ator_game({W.LEATHER: (55, 1)})
+        a = g.char()["snapshot"]["auctionator"]
+        self.assertTrue(a["loaded"])
+        self.assertTrue(a["dataFresh"])
+        self.assertEqual(a["maxAgeDays"], 5)
+        leather = a["items"]["Light Leather"]
+        self.assertEqual((leather["price"], leather["ageDays"], leather["fresh"], leather["itemID"]),
+                         (55, 1, True, W.LEATHER))
+        self.assertNotIn("Linen Cloth", a["items"])          # Auctionator has no price for it
+        self.assertTrue(g.lua.eval('ATOR_CALLERS["AICompanion"] == true'))
+        g.M.openAuction()
+        self.assertFalse(self.button(g).shown)
+        self.assertTrue(any("Prices come from Auctionator" in l for l in g.chat()))
+        self.assertEqual(g.auction_queries(), [])
+
+    def test_stale_prices_show_the_button(self):
+        g = self.ator_game({W.LEATHER: (55, 9)})
+        self.assertFalse(g.char()["snapshot"]["auctionator"]["dataFresh"])
+        g.M.openAuction()
+        self.assertTrue(self.button(g).shown)
+
+    def test_price_older_than_21_days_has_no_age(self):
+        g = self.ator_game({W.LEATHER: (55, None)})          # Auctionator returns no age past 21 days
+        leather = g.char()["snapshot"]["auctionator"]["items"]["Light Leather"]
+        self.assertEqual((leather["price"], leather["fresh"]), (55, False))
+        self.assertNotIn("ageDays", leather)
+
+    def test_age_setting_changes_what_counts_as_fresh(self):
+        g = self.ator_game({W.LEATHER: (55, 9)})
+        g.slash("/aic ah age 10")
+        self.assertEqual(g.db()["auctionatorMaxAgeDays"], 10)
+        g.M.openAuction()
+        self.assertFalse(self.button(g).shown)
+        g.M.closeAuction()
+        g.slash("/aic ah age 3")
+        g.M.openAuction()
+        self.assertTrue(self.button(g).shown)
+
+    def test_manual_check_skips_items_with_fresh_prices(self):
+        g = self.ator_game({W.LEATHER: (55, 1), W.LINEN: (20, 8)})
+        g.M.openAuction()
+        g.slash("/aic ah")
+        g.advance(60)
+        queried = [q["search"] for q in g.auction_queries()]
+        self.assertNotIn("Light Leather", queried)           # fresh in Auctionator
+        self.assertIn("Linen Cloth", queried)                # too old in Auctionator
+        self.assertEqual(len(queried), 7)
+
+    def test_nothing_to_check_when_every_price_is_fresh(self):
+        g = self.ator_game(default=(10, 0))
+        g.M.openAuction()
+        g.slash("/aic ah")
+        g.advance(30)
+        self.assertEqual(g.auction_queries(), [])
+        self.assertTrue(any("nothing to check" in l for l in g.chat()))
+
+    def test_auctionator_without_its_functions_counts_as_missing(self):
+        g = self.ator_game(api=False)
+        self.assertEqual(g.char()["snapshot"]["auctionator"], {"loaded": False, "maxAgeDays": 5})
+        g.M.openAuction()
+        self.assertTrue(self.button(g).shown)
+
+    def test_auctionator_errors_fall_back_to_the_manual_check(self):
+        g = self.ator_game(raises=True)
+        self.assertFalse(g.char()["snapshot"]["auctionator"]["dataFresh"])
+        g.M.openAuction()
+        self.assertTrue(self.button(g).shown)
+        g.slash("/aic ah")
+        g.advance(60)
+        self.assertEqual(len(g.auction_queries()), 8)
+
+    def test_without_auctionator_the_snapshot_says_so(self):
+        g = self.game()
+        self.assertEqual(g.char()["snapshot"]["auctionator"], {"loaded": False, "maxAgeDays": 5})
+
+    def test_tooltip_leaves_the_price_line_to_auctionator(self):
+        g = self.ator_game({W.LEATHER: (55, 9)})             # stale, so the manual check runs
+        g.M.openAuction()
+        g.slash("/aic ah")
+        g.advance(60)
+        leather = [l or "" for l, _ in g.hover(W.LEATHER)]
+        self.assertFalse(any("listed" in l for l in leather), leather)
+        helm = [l or "" for l, _ in g.hover(W.PLATE_HELM)]    # Auctionator has no price: our line stays
+        self.assertTrue(any("listed" in l for l in helm), helm)
+
+
 if __name__ == "__main__":
     unittest.main()

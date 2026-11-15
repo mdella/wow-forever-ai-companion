@@ -49,7 +49,8 @@ Claude reads your snapshot, researches Forever sources, and writes its advice in
 |---|---|
 | `/aic save` | Take a snapshot and reload so it is written to disk. Do this before asking for advice. |
 | `/aic ask <question>` | Leave a question for your companion with the next snapshot. |
-| `/aic ah` | At an auctioneer: check prices for your bags, bank and shopping list. |
+| `/aic ah` | At an auctioneer: check prices for your bags, bank and shopping list. If you use Auctionator, its prices are used instead and this checks only what Auctionator hasn't seen lately. |
+| `/aic ah age <days>` | With Auctionator: how many days its prices count as fresh (default 5). Older than that, the "check prices" button comes back. |
 | `/aic sort` | Group your bags by what to do with each item: sell, auction, mail, bank, use, craft, quest, keep. Also a "Sort by advice" button above your bags. |
 | `/aic panel` | Open your companion panel: this character's plan, inside the game. Also the book button on the minimap (drag it to move it). |
 | `/aic copy` | Show a text summary you can copy and paste. |
@@ -74,6 +75,7 @@ Auction 7c (2653 listed, 34m ago)          vendor 1c
 - WoW: Forever is new. Much of what is written online is about older versions of the game. The guide tells Claude to say so whenever its source is not about Forever. When the game and the advice disagree, the game is right.
 - The built-in rules know item categories, not recipes. They will not tell you what to craft.
 - The add-on writes its file only on `/reload` or logout. Advice is only as fresh as your last save.
+- If you use **Auctionator**, AI Companion reads its prices, so you don't need the "check prices" button. The button only appears when Auctionator's prices are older than 5 days, or Auctionator isn't installed.
 
 ## Repository layout
 
