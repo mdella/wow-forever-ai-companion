@@ -54,7 +54,7 @@ AICompanionDB
   tooltipHook     "ok" when the tooltip feature registered
 ```
 
-`snapshot` holds: `takenAt`, `takenAtText`, `reason`, `character` (name, level, class, race, sex, money in copper, xp), `location` (zone, sub-zone, coordinates, hearthstone), `equipment`, `bags[]` (each with `slots`, `free`, `items[]`; items carry name, count, quality, type, `sellPriceEach` in copper, and the game tooltip lines), `quests` (active, with objectives and rewards), `completedQuests`, `skills.professions` (name, rank, max), `skillsModern`, `spells`, `talents`, `legacy`, `reputation`, `auras`, `currencies`, `challenges`, `client` (includes `addonVersion`), and `errors` (sections that failed to read).
+`snapshot` holds: `takenAt`, `takenAtText`, `reason`, `character` (name, level, class, race, sex, money in copper, xp), `location` (zone, sub-zone, coordinates, hearthstone), `equipment`, `bags[]` (each with `slots`, `free`, `items[]`; items carry name, count, quality, type, `sellPriceEach` in copper, and the game tooltip lines), `quests` (active, with objectives and rewards), `completedQuests`, `skills.professions` (name, rank, max), `skillsModern`, `spells`, `talents`, `legacy`, `reputation`, `auras`, `currencies`, `challenges`, `auctionator` (below), `client` (includes `addonVersion`), and `errors` (sections that failed to read).
 
 Known limits:
 - `character.health` is unreliable. Ignore it.
@@ -62,6 +62,7 @@ Known limits:
 - A quest with no countable objectives reports `complete` even when it only needs delivering. Treat it as "travel to finish", not "ready to hand in".
 - Recipe entries carry `name`, `learned`, `difficulty`, but **not ingredients**. Ingredients must be looked up and labelled by source. `difficulty` appears to run from 0 (full skill gain) to 3 (no skill gain); treat that reading as an interpretation.
 - `auction.results[name]`: `found`, `minPrice` (copper, each), `quantity`, `checkedAt`. `found = false` means none listed at that moment, not that the item cannot be sold.
+- `snapshot.auctionator`: prices from the Auctionator add-on, when the player has it. `loaded` (false: not installed, not ticked, or its functions are missing), `maxAgeDays` (the player's freshness setting, default 5), `dataFresh` (at least one item seen within that many days), `priced`, `fresh`, `newestAgeDays`, and `items["<item name>"]` with `itemID`, `price` (copper, each, the lowest Auctionator last saw), `ageDays` (days since Auctionator last saw it; absent past 21 days), `fresh`, `kind` (bag, bank or shopping), `count`. Prefer it over `auction.results` when it is fresh; it does not say how many are listed. State the age when it matters.
 
 ## 5. In-game commands
 
@@ -70,7 +71,8 @@ Known limits:
 | `/aic save` | Snapshot, then reload so it reaches disk. |
 | `/aic` | Snapshot only (not on disk until reload or logout). |
 | `/aic ask <question>` | Stores a question with the next save. |
-| `/aic ah` | At an auctioneer: price check of bags, bank and the shopping list. There is also a button at the bottom right of the auction window. Takes about a minute. Results reach disk at the next save. |
+| `/aic ah` | At an auctioneer: price check of bags, bank and the shopping list. Takes about a minute. Results reach disk at the next save. With Auctionator, it checks only the items Auctionator has no fresh price for, and the button at the bottom right of the auction window appears only when Auctionator's prices are missing or older than the setting. |
+| `/aic ah age <days>` | With Auctionator: how many days its prices count as fresh (default 5). |
 | `/aic sort` | Groups the bags by advice: sell, auction, mail, bank, use, craft, quest, keep, then the rest. Also a "Sort by advice" button above the bag window. |
 | `/aic panel` | Opens the companion panel: this character's plan, with self-ticking steps. Also the minimap button. |
 | `/aic sort debug` | What the bag sort found (bag windows, button) and why it last stopped. Saved in `AICompanionDB.sortDebug` for you to read. |
@@ -157,6 +159,7 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 ## Changelog
 
+- 0.11.0 — Prices from Auctionator when the player has it, in `snapshot.auctionator`. The "check prices" button appears only when Auctionator is missing or its prices are older than `/aic ah age` (default 5 days), and `/aic ah` then checks only the rest. The add-on's own tooltip price line is left out for items Auctionator prices. Needs a full game restart once (`.toc` change).
 - 0.10.4 — Installing is one folder, `AICompanion`. `gen_data.py` creates `AICompanion_Data` and its `.toc` when missing, so an install or update can never replace the player's data. The data add-on's game version follows the installed add-on release. Snapshots record `client.dataAddon`.
 - 0.10.3 — Includes 0.9.2: using items from the bags is no longer blocked, and blocked actions are recorded in `blockedActions`. The panel's minimap button and window were checked against the same rule: they sit on the minimap edge and on UIParent and never touch a game window.
 - 0.10.2 — No source tags in the panel's lists. An expanded step adds one plain line for an original-game source ("From the original game. Not confirmed for Forever.") or an unverified one ("Not verified yet."), then the source's name.
