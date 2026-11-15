@@ -4,7 +4,7 @@
 -- It never automates gameplay: it only reads data the game already shows you.
 
 local ADDON_NAME = ...
-local VERSION = "0.8.1"
+local VERSION = "0.9.0"
 local PREFIX = "|cff66ccffAI Companion|r: "
 
 local DB            -- AICompanionDB once loaded
@@ -1313,9 +1313,9 @@ local function ruleFor(name)
     local st = DB.characters and DB.characters[charKey]
     local snap = type(st) == "table" and st.snapshot or nil
     if type(snap) ~= "table" then return nil end
-    if not ruleCache or ruleCacheAt ~= snap.takenAt then
+    if not ruleCache or ruleCacheAt ~= snap then
         local ok, out = pcall(Rules.adviseAll, DB, charKey)
-        ruleCache, ruleCacheAt = (ok and type(out) == "table") and out or {}, snap.takenAt
+        ruleCache, ruleCacheAt = (ok and type(out) == "table") and out or {}, snap
     end
     local a = ruleCache[name]
     if type(a) ~= "table" then return nil end
@@ -1376,6 +1376,147 @@ local function hookTooltips()
     return false, "no tooltip hook available"
 end
 
+
+-------------------------------------------------------------------------------
+-- Bag sort by recommended action
+-- Groups the items in the ordinary bags by what to do with them, one swap at a time,
+-- waiting for the game to confirm each move. Special bags (quiver, ammo pouch, reagent
+-- bag) are left alone. It stops, with nothing lost, if the bags change under it.
+-------------------------------------------------------------------------------
+
+local SORT_GROUP = { sell = 1, auction = 2, mail = 3, bank = 4, use = 5, craft = 6, quest = 7, carry = 8, keep = 8 }
+local sorter = { running = false }
+
+local function sortSlots()
+    local slots = {}
+    for bag = 0, math.min(lastPlayerBag(), 4) do
+        local n = try(C_Container.GetContainerNumSlots, bag)
+        local _, family = try(C_Container.GetContainerNumFreeSlots, bag)
+        if type(n) == "number" and n > 0 and (family == nil or family == 0) then
+            for slot = 1, n do slots[#slots + 1] = { bag = bag, slot = slot } end
+        end
+    end
+    return slots
+end
+
+local function slotItem(p)
+    local info = try(C_Container.GetContainerItemInfo, p.bag, p.slot)
+    if type(info) ~= "table" or info.itemID == nil or isSecret(info.itemID) then return false, false, nil end
+    return info.itemID, info.isLocked == true, info
+end
+
+-- The item ID each slot should hold once sorted, or false for an empty slot.
+local function sortTarget(slots)
+    local items = {}
+    for _, p in ipairs(slots) do
+        local id, _, info = slotItem(p)
+        if id then
+            local name = info.itemName or (C_Item and try(C_Item.GetItemNameByID, id))
+            if type(name) ~= "string" or isSecret(name) then name = nil end
+            local action = adviceFor(name)
+            if not action then action = ruleFor(name) end
+            items[#items + 1] = { id = id, name = name or "", group = SORT_GROUP[action] or 9 }
+        end
+    end
+    table.sort(items, function(a, b)
+        if a.group ~= b.group then return a.group < b.group end
+        if a.name ~= b.name then return a.name < b.name end
+        return a.id < b.id
+    end)
+    local want = {}
+    for i = 1, #slots do want[i] = items[i] and items[i].id or false end
+    return want
+end
+
+local function sortStop(message)
+    sorter.running = false
+    if try(CursorHasItem) then try(ClearCursor) end   -- puts a held item back where it came from
+    say(message)
+end
+
+local sortStep
+sortStep = function()
+    if not sorter.running then return end
+    if InCombatLockdown and InCombatLockdown() then return sortStop("bag sort stopped: you entered combat. Nothing was lost.") end
+    if try(CursorHasItem) then return sortStop("bag sort stopped: something is on your cursor. Nothing was lost.") end
+    local slots, model, want = sorter.slots, sorter.model, sorter.want
+    for i, p in ipairs(slots) do
+        local id, locked = slotItem(p)
+        if locked then
+            sorter.waits = sorter.waits + 1
+            if sorter.waits > 50 then return sortStop("bag sort stopped: the game did not confirm a move. Nothing was lost.") end
+            C_Timer.After(0.1, sortStep)
+            return
+        end
+        if id ~= model[i] then return sortStop("bag sort stopped: your bags changed while sorting. Nothing was lost; sort again.") end
+    end
+    sorter.waits = 0
+    for i = sorter.pos, #slots do
+        if not want[i] then break end
+        if model[i] ~= want[i] then
+            -- take the wanted item from a later slot, preferring one that is itself out of place
+            local j
+            for k = i + 1, #slots do
+                if model[k] == want[i] and model[k] ~= want[k] then j = k break end
+            end
+            if not j then
+                for k = i + 1, #slots do
+                    if model[k] == want[i] then j = k break end
+                end
+            end
+            if not j then return sortStop("bag sort stopped: lost track of an item. Nothing was lost; sort again.") end
+            -- model[i] and model[j] differ, so this is a move or a swap, never a stack merge
+            try(C_Container.PickupContainerItem, slots[j].bag, slots[j].slot)
+            try(C_Container.PickupContainerItem, slots[i].bag, slots[i].slot)
+            if not sorter.running then return end   -- the game forbade the move
+            if try(CursorHasItem) then return sortStop("bag sort stopped: the game refused a move. Nothing was lost.") end
+            model[i], model[j] = model[j], model[i]
+            sorter.moves, sorter.pos = sorter.moves + 1, i + 1
+            C_Timer.After(0.1, sortStep)
+            return
+        end
+    end
+    sorter.running = false
+    say(("bags sorted by advice in %d moves: sell, auction, mail, bank, use, craft, quest, keep, then the rest."):format(sorter.moves))
+end
+
+local function sortStart()
+    if not DB or not charKey then return end
+    if InCombatLockdown and InCombatLockdown() then say("can't sort bags in combat.") return end
+    if sorter.running then say("already sorting your bags.") return end
+    if not (C_Container and C_Container.PickupContainerItem) then say("this client does not let add-ons move items.") return end
+    if try(CursorHasItem) then say("put down the item on your cursor first, then sort again.") return end
+    takeSnapshot("sort")
+    local slots = sortSlots()
+    local model = {}
+    for i, p in ipairs(slots) do
+        local id, locked = slotItem(p)
+        if locked then say("an item is still moving; try again in a moment.") return end
+        model[i] = id
+    end
+    sorter = { running = true, slots = slots, model = model, want = sortTarget(slots), pos = 1, moves = 0, waits = 0 }
+    sortStep()
+end
+
+-- A button above the bag window. Frame names follow the modern client; if neither exists, /aic sort still works.
+local sortButtons = {}
+local function addSortButton(parent)
+    if not parent or sortButtons[parent] or type(parent.HookScript) ~= "function" then return end
+    local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    b:SetSize(120, 20)
+    b:SetPoint("BOTTOMRIGHT", parent, "TOPRIGHT", -4, 2)
+    b:SetText("Sort by advice")
+    b:SetScript("OnClick", function() local ok, e = pcall(sortStart) if not ok then say("bag sort failed: " .. tostring(e)) end end)
+    sortButtons[parent] = b
+end
+
+local function hookBagWindows()
+    for _, name in ipairs({ "ContainerFrameCombinedBags", "ContainerFrame1" }) do
+        local f = _G[name]
+        if type(f) == "table" then pcall(addSortButton, f) end
+    end
+end
+
 local function countErrors(snap)
     local n = 0
     for _ in pairs(snap.errors or {}) do n = n + 1 end
@@ -1418,6 +1559,8 @@ local function handleSlash(msg)
         say("question noted. Type /aic save to send it with a fresh snapshot.")
     elseif cmd == "ah" or cmd == "auction" then
         ahStart()
+    elseif cmd == "sort" then
+        sortStart()
     elseif cmd == "probe" then
         local ok, res = pcall(probeAPI)
         if ok then DB.apiProbe = clean(res) say("interface probe stored (" .. #res.namespaces .. " namespaces).")
@@ -1429,6 +1572,7 @@ local function handleSlash(msg)
         print("  /aic copy       show a text summary you can copy and paste")
         print("  /aic ask <q>    note a question for your companion")
         print("  /aic ah         at an auctioneer: check prices for your bags, bank and shopping list")
+        print("  /aic sort       group your bags by advice: sell, auction, mail, bank, use, craft, quest, keep")
     end
 end
 
@@ -1454,6 +1598,7 @@ function handlers.ADDON_LOADED(name)
     DB.addonVersion = VERSION
     DB.characters = DB.characters or {}
     DB.questions = DB.questions or {}
+    pcall(hookBagWindows)
     local okHook, hookErr = hookTooltips()
     DB.tooltipHook = okHook and "ok" or ("failed: " .. tostring(hookErr))
 end
@@ -1502,6 +1647,10 @@ handlers.TRAINER_SHOW = function() C_Timer.After(0.5, function() pcall(captureTr
 handlers.MERCHANT_SHOW = function() C_Timer.After(0.5, function() pcall(captureMerchant) end) end
 handlers.TAXIMAP_OPENED = function() C_Timer.After(0.5, function() pcall(captureTaxi) end) end
 handlers.TRADE_SKILL_LIST_UPDATE = function() pcall(captureRecipes) end
+handlers.PLAYER_REGEN_DISABLED = function() if sorter.running then sortStop("bag sort stopped: you entered combat. Nothing was lost.") end end
+handlers.ADDON_ACTION_FORBIDDEN = function(addon)
+    if addon == ADDON_NAME and sorter.running then sortStop("bag sort stopped: the game does not let add-ons move items here.") end
+end
 handlers.AUCTION_HOUSE_SHOW = ahShow
 handlers.AUCTION_HOUSE_CLOSED = ahClosed
 handlers.AUCTION_HOUSE_BROWSE_RESULTS_UPDATED = ahBrowseResults

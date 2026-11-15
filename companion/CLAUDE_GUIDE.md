@@ -70,6 +70,7 @@ Known limits:
 | `/aic` | Snapshot only (not on disk until reload or logout). |
 | `/aic ask <question>` | Stores a question with the next save. |
 | `/aic ah` | At an auctioneer: price check of bags, bank and the shopping list. There is also a button at the bottom right of the auction window. Takes about a minute. Results reach disk at the next save. |
+| `/aic sort` | Groups the bags by advice: sell, auction, mail, bank, use, craft, quest, keep, then the rest. Also a "Sort by advice" button above the bag window. |
 | `/aic copy` | Text summary the player can paste into chat. |
 | `/aic help` | Command list. |
 
@@ -149,6 +150,7 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 ## Changelog
 
+- 0.9.0 — `/aic sort` and a "Sort by advice" button above the bag window group the bags by action: sell, auction, mail, bank, use, craft, quest, keep, then the rest. Out of combat only; special bags untouched; stops with nothing lost if the bags change.
 - 0.8.1 — The two-minute background snapshot now runs (it never did). Rule advice always fits the 48-character tooltip limit.
 - 0.8.0 — Built-in rules give item advice without an assistant. Tooltip text limited to one short line (`tip`).
 - 0.7.0 — Personal data moved to the separate `AICompanion_Data` add-on. Item advice in tooltips with immediate actions. Auction price check.

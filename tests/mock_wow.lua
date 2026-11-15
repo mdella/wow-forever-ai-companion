@@ -301,7 +301,7 @@ function C_Container.GetContainerNumFreeSlots(b)
     if not x then return 0, 0 end
     local used = 0
     for s = 1, x.slots do if x.items and x.items[s] then used = used + 1 end end
-    return x.slots - used, 0
+    return x.slots - used, x.family or 0
 end
 function C_Container.GetContainerItemInfo(b, s)
     local x = bag(b)
@@ -311,6 +311,7 @@ function C_Container.GetContainerItemInfo(b, s)
     return {
         hyperlink = M.link(slot.id), stackCount = slot.count or 1, itemID = slot.id, itemName = it.name,
         isBound = slot.bound == true, hasNoValue = (it.sellPrice or 0) == 0, quality = it.quality,
+        isLocked = slot.locked == true,
     }
 end
 
@@ -330,6 +331,78 @@ C_TooltipInfo = {
     end,
     GetInventoryItem = function(unit, slot) return EQUIP[slot] and tooltipData(EQUIP[slot]) end,
 }
+
+
+-------------------------------------------------------------------------------
+-- Cursor and item moves, as the client does them:
+-- picking up an item and putting it on an empty slot moves it; on a different item, swaps;
+-- on the same stackable item, merges the stacks. Moved slots stay locked until the server
+-- confirms (MOVE_LOCK seconds). A special bag (family ~= 0) only takes items of its kind.
+-------------------------------------------------------------------------------
+
+local MOVE_LOCK = W.moveLock or 0.2
+M.cursor = nil
+M.moves = 0
+
+local function slotRef(b, s)
+    local x = bag(b)
+    if not x or s < 1 or s > x.slots then return nil end
+    x.items = x.items or {}
+    return x
+end
+
+local function lock(x, s)
+    local it = x.items[s]
+    if it then it.locked = true end
+    schedule(MOVE_LOCK, function()
+        if x.items[s] then x.items[s].locked = nil end
+        M.fire("BAG_UPDATE_DELAYED")
+    end)
+end
+
+C_Container.PickupContainerItem = function(b, s)
+    if InCombatLockdown() then violation("item moved in combat") end
+    if W.forbidMoves then M.fire("ADDON_ACTION_FORBIDDEN", "AICompanion", "PickupContainerItem()") return end
+    local x = slotRef(b, s)
+    if not x then return end
+    local here = x.items[s]
+    if here and here.locked then violation("picked up a locked item at " .. b .. "/" .. s) return end
+    if not M.cursor then
+        if here then M.cursor = { bag = b, slot = s, x = x } end
+        return
+    end
+    if W.refusePlace then return end   -- the client keeps the item on the cursor
+    local from = M.cursor
+    local fx, fs = from.x, from.slot
+    local moving = fx.items[fs]
+    M.cursor = nil
+    if fx == x and fs == s then return end
+    if (x.family or 0) ~= 0 and not (ITEMS[moving.id] and ITEMS[moving.id].family == x.family) then
+        violation("put an item into a special bag that does not take it") M.cursor = from return
+    end
+    if here and (fx.family or 0) ~= 0 and not (ITEMS[here.id] and ITEMS[here.id].family == fx.family) then
+        violation("swapped an item into a special bag that does not take it") M.cursor = from return
+    end
+    M.moves = M.moves + 1
+    if here and here.id == moving.id and (ITEMS[here.id] and (ITEMS[here.id].maxStack or 1) > 1) then
+        local max = ITEMS[here.id].maxStack
+        local total = (here.count or 1) + (moving.count or 1)
+        here.count = math.min(total, max)
+        if total > max then moving.count = total - max else fx.items[fs] = nil end
+    else
+        x.items[s], fx.items[fs] = moving, here
+    end
+    lock(x, s)
+    lock(fx, fs)
+end
+
+function ClearCursor() M.cursor = nil end
+function CursorHasItem() return M.cursor ~= nil end
+function GetCursorInfo()
+    if not M.cursor then return nil end
+    local it = M.cursor.x.items[M.cursor.slot]
+    return "item", it and it.id, it and M.link(it.id)
+end
 
 -------------------------------------------------------------------------------
 -- Quests

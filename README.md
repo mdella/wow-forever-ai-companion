@@ -47,6 +47,7 @@ Claude reads your snapshot, researches Forever sources, and writes its advice in
 | `/aic save` | Take a snapshot and reload so it is written to disk. Do this before asking for advice. |
 | `/aic ask <question>` | Leave a question for your companion with the next snapshot. |
 | `/aic ah` | At an auctioneer: check prices for your bags, bank and shopping list. |
+| `/aic sort` | Group your bags by what to do with each item: sell, auction, mail, bank, use, craft, quest, keep. Also a "Sort by advice" button above your bags. |
 | `/aic copy` | Show a text summary you can copy and paste. |
 | `/aic help` | All commands. |
 

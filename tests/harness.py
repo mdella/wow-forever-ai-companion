@@ -55,6 +55,7 @@ class Game:
         self.data_source = data_source       # replacement AICompanion_Data.lua text, if any
         self.lua = None
         self.reloads = 0
+        self.lua_prelude = None              # Lua run after the stand-in client loads, before the add-ons
 
     # ------------------------------------------------------------------ startup
 
@@ -65,6 +66,8 @@ class Game:
         with open(MOCK, encoding="utf-8") as f:
             self.lua.execute(f.read())
         self.M = self.lua.globals().Mock
+        if self.lua_prelude:
+            self.lua.execute("local M = Mock\n" + self.lua_prelude)
         allowed = self.lua.table_from({k: True for k in DECLARED_GLOBALS})
         self.M.trackGlobals(allowed)
         for addon in ("AICompanion_Data", "AICompanion"):
@@ -175,6 +178,7 @@ class Game:
             "game would refuse": to_py(self.M.violations) or [],
             "stray globals": to_py(self.M.newGlobals) or [],
             "add-on event errors": [e for e in [(self.db() or {}).get("lastEventError")] if e],
+            "item left on the cursor": ["yes"] if self.M.cursor is not None else [],
         }
 
     def check_clean(self):

@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from harness import ROOT, Game  # noqa: E402
+from harness import ROOT, Game, to_py  # noqa: E402
 import world as W  # noqa: E402
 
 
@@ -407,6 +407,181 @@ class Tooltips(GameTest):
         lines = g.hover(W.LEATHER)                    # companion advice wins over the rule
         self.assertEqual(lines[1][0], "AI Companion: Put in bank")
         self.assertEqual(lines[2][0], "For Leatherworking 55+.")
+
+
+QUIVER = 1090
+SORTED_ORDER = ["Broken Fang", "Linen Cloth", "Battleworn Plate Helm", "Pattern: Fine Leather Belt",
+                "Hearthstone", "Light Leather", "Roasted Boar Meat", "Rough Arrow", "Hunting Bow"]
+
+
+def sort_world():
+    """The test character with a quiver (a special bag) and a split stack of leather."""
+    w = W.world()
+    w["items"][W.ARROWS]["family"] = 1
+    w["bags"][2] = {"slots": 4, "name": "Light Quiver", "family": 1, "items": {2: {"id": W.ARROWS, "count": 200}}}
+    w["bags"][1]["items"][3] = {"id": W.LEATHER, "count": 5}
+    return w
+
+
+class BagSort(GameTest):
+    def layout(self, g, bag=None):
+        """(bag, slot, name, count) for every item, in bag order."""
+        out = []
+        bags = g.lua.globals().WORLD.bags
+        for b in sorted(bags.keys()):
+            if bag is not None and b != bag:
+                continue
+            slots = bags[b]["items"]
+            for s in sorted(slots.keys()) if slots is not None else []:
+                it = slots[s]
+                out.append((b, s, W.ITEMS[it["id"]]["name"], it["count"] or 1))
+        return out
+
+    def contents(self, g):
+        totals = {}
+        for _, _, name, count in self.layout(g):
+            totals[name] = totals.get(name, 0) + count
+        return totals
+
+    def names_in_order(self, g):
+        seen = []
+        for b, _, name, _ in self.layout(g):
+            if b != 2 and (not seen or seen[-1] != name):
+                seen.append(name)
+        return seen
+
+    def test_groups_items_by_action(self):
+        g = self.game(sort_world())
+        before = self.contents(g)
+        g.slash("/aic sort")
+        g.advance(30)
+        self.assertEqual(self.names_in_order(g), SORTED_ORDER)
+        self.assertEqual(self.contents(g), before)                     # nothing lost or merged away
+        self.assertTrue(any("bags sorted by advice" in l for l in g.chat()))
+        bags = [b for b, *_ in self.layout(g) if b != 2]
+        self.assertEqual([s for _, s, *_ in self.layout(g, 0)], list(range(1, 11)))
+        self.assertEqual(bags, [0] * 10)                               # 10 stacks, packed into the backpack first
+
+    def test_special_bags_are_left_alone(self):
+        g = self.game(sort_world())
+        g.slash("/aic sort")
+        g.advance(30)
+        self.assertEqual(self.layout(g, 2), [(2, 2, "Rough Arrow", 200)])
+
+    def test_two_stacks_of_one_item_are_kept_apart(self):
+        g = self.game(sort_world())
+        g.slash("/aic sort")
+        g.advance(30)
+        leather = sorted(c for _, _, n, c in self.layout(g) if n == "Light Leather")
+        self.assertEqual(leather, [5, 14])
+
+    def test_sorting_twice_changes_nothing(self):
+        g = self.game(sort_world())
+        g.slash("/aic sort")
+        g.advance(30)
+        first, moves = self.layout(g), g.M.moves
+        g.slash("/aic sort")
+        g.advance(30)
+        self.assertEqual(self.layout(g), first)
+        self.assertEqual(g.M.moves, moves)
+
+    def test_companion_advice_decides_the_group(self):
+        data = 'AICompanionShopping = {}\nAICompanionAdvice = { asOf = "Nov 15", characters = { ["Testchar"] = { ["Hunting Bow"] = { "sell", "Vendor it." } } } }\n'
+        g = self.game(sort_world(), data_source=data)
+        g.slash("/aic sort")
+        g.advance(30)
+        self.assertEqual(self.names_in_order(g)[:3], ["Broken Fang", "Hunting Bow", "Linen Cloth"])
+
+    def test_refused_in_combat(self):
+        g = self.game(sort_world())
+        g.set("inCombat", True)
+        g.slash("/aic sort")
+        g.advance(10)
+        self.assertEqual(g.M.moves, 0)
+        self.assertTrue(any("can't sort bags in combat" in l for l in g.chat()))
+
+    def test_stops_when_combat_starts(self):
+        g = self.game(sort_world())
+        before = self.contents(g)
+        g.slash("/aic sort")
+        g.advance(0.25)
+        g.set("inCombat", True)
+        g.fire("PLAYER_REGEN_DISABLED")
+        moves = g.M.moves
+        g.advance(30)
+        self.assertEqual(g.M.moves, moves)
+        self.assertEqual(self.contents(g), before)
+        self.assertTrue(any("you entered combat" in l for l in g.chat()))
+
+    def test_stops_when_combat_starts_before_the_game_says_so(self):
+        g = self.game(sort_world())
+        g.slash("/aic sort")
+        g.advance(0.25)
+        g.set("inCombat", True)          # combat has begun; PLAYER_REGEN_DISABLED not yet delivered
+        moves = g.M.moves
+        g.advance(30)
+        self.assertEqual(g.M.moves, moves)
+        self.assertTrue(any("you entered combat" in l for l in g.chat()))
+
+    def test_refused_move_leaves_nothing_on_the_cursor(self):
+        w = sort_world()
+        w["refusePlace"] = True
+        g = self.game(w)
+        before = self.layout(g)
+        g.slash("/aic sort")
+        g.advance(10)
+        self.assertEqual(self.layout(g), before)
+        self.assertTrue(any("the game refused a move" in l for l in g.chat()))
+        # tearDown fails the test if an item is still on the cursor
+
+    def test_stops_when_loot_arrives_mid_sort(self):
+        g = self.game(sort_world())
+        g.slash("/aic sort")
+        g.advance(0.25)
+        g.lua.execute("WORLD.bags[0].items[16] = { id = %d, count = 1 }" % W.JUNK)   # looted mid-sort
+        moves = g.M.moves
+        g.advance(30)
+        self.assertEqual(g.M.moves, moves)
+        self.assertEqual(self.contents(g)["Broken Fang"], 4)
+        self.assertTrue(any("your bags changed while sorting" in l for l in g.chat()))
+
+    def test_refused_while_holding_an_item(self):
+        g = self.game(sort_world())
+        g.lua.execute("C_Container.PickupContainerItem(0, 2)")
+        g.slash("/aic sort")
+        self.assertTrue(any("put down the item on your cursor" in l for l in g.chat()))
+        self.assertEqual(g.M.moves, 0)
+        g.lua.execute("ClearCursor()")
+
+    def test_stops_if_the_game_forbids_moves(self):
+        w = sort_world()
+        w["forbidMoves"] = True
+        g = self.game(w)
+        before = self.layout(g)
+        g.slash("/aic sort")
+        g.advance(10)
+        self.assertEqual(self.layout(g), before)
+        self.assertTrue(any("does not let add-ons move items" in l for l in g.chat()))
+
+    def test_slow_server(self):
+        w = sort_world()
+        w["moveLock"] = 1.5
+        g = self.game(w)
+        g.slash("/aic sort")
+        g.advance(120)
+        self.assertEqual(self.names_in_order(g), SORTED_ORDER)
+
+    def test_button_on_the_bag_window(self):
+        g = Game(sort_world())
+        self.games.append(g)
+        g.start()
+        self.assertIsNone(g.lua.globals().ContainerFrame1)   # no bag window in the stand-in by default
+        g2 = Game(sort_world())
+        self.games.append(g2)
+        g2.lua_prelude = "M.widget('Frame', 'ContainerFrame1')"
+        g2.start()
+        frames = [f for f in to_py(g2.M.frames) if f.get("text") == "Sort by advice"]
+        self.assertEqual(len(frames), 1)
 
 
 if __name__ == "__main__":
