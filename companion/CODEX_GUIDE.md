@@ -55,6 +55,8 @@ Attach `CODEX_GUIDE.md`, then say:
 6. **Verify absence two ways.** "I did not find X in source S" is different from "X does not exist". Say which one you mean.
 7. **The player does not run commands or edit files.** You do all file work. With local file access, the only things you ask of them are in-game actions: a slash command, opening a window, `/reload`, or restarting the game. In advice-only chat, ask them to paste `/aic copy` output or attach a snapshot; do not ask them to run scripts or edit Lua.
 8. **Write to the player as "you".** The player is playing the character. Every piece of text written for the player (headline, short headline, steps, notes, item tips, professions, gear, talents, bags, blind spots) addresses the player as "you" and "your": "Your bags are full", never "Her bags are full" or "He is in Darnassus". Never refer to the played character in the third person. Use the third person only for someone else: an NPC, a monster, or another of the player's own characters named in the text ("Mail to <name> for her Alchemy"). For another character's pronouns, `character.sex` in that character's snapshot is 2 for male, 3 for female.
+9. **Every place comes with coordinates.** Every vendor, trainer, quest giver, hand-in, cave, camp, dungeon entrance, mailbox, bank and auction house named in advice comes with its zone and map coordinates, in tips, notes and step details alike: "Recipe: <vendor>, <zone> 37.0, 56.3" fits a 48-character tip. If no coordinates can be found, say so in the note and describe the spot in words; never leave a bare name. Label a coordinate's source like any other fact: a Forever source, the original game, or the player's own position from the snapshot (`location.x`, `location.y`).
+   - **Stormwind City:** Forever redrew the Stormwind map to include the harbour, so coordinates from original-game guides are wrong there. Use only Forever sources for Stormwind. Before trusting original-game coordinates for any other city, check a Forever source for the same change.
 
 ## 2. Files
 
@@ -140,7 +142,7 @@ The same file carries the plan sections (`headline`, `next`, `questing`, `profes
 
 - Character keys are **first names** exactly as the game shows them.
 - `items`: one entry per item name, `{ "action": ..., "tip": ..., "note": ... }`.
-  - `tip` is the tooltip line: **48 characters at most**, plain ASCII, the single most useful fact (what, where, or why). The generator refuses longer text.
+  - `tip` is the tooltip line: **48 characters at most**, plain ASCII, the single most useful fact (what, where, or why). The generator refuses longer text. When the fact is a place, include its zone and coordinates (rule 9): `"tip": "Recipe: Vendor Name, Zone 37.0, 56.3"`.
   - `note` is the full explanation for the dashboard: one to three sentences, with source labelling.
   - The tooltip shows the action label, the tip, and the date generated.
 - `shopping`: item names to price-check at the auction house in addition to what the character carries.
