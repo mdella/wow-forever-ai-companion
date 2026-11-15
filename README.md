@@ -126,7 +126,7 @@ Auction 7c (2653 listed, 34m ago)          vendor 1c
 | `AddOns/AICompanion/` | The add-on: `AICompanion.lua` (snapshots, auction check, tooltips) and `AICompanion_Rules.lua` (built-in advice rules). |
 | `AddOns/AICompanion_Data/` | Empty template of the data add-on, used by the tests. Not installed; your companion creates your own copy. |
 | `companion/CLAUDE_GUIDE.md` | Claude companion instructions. |
-| `AGENTS.md` | Entry point for Codex; links to the existing development rules and optional gameplay guide. |
+| `AGENTS.md` | Shared entry point for all agents, with common rules and separate provider-specific sections. |
 | `companion/CODEX_GUIDE.md` | Optional Codex / ChatGPT setup, gameplay instructions and starting prompts. |
 | `companion/` | Tools the assistant uses: `gen_data.py` (writes the data add-on from a plan file), `build.py` and `template.html` (dashboard), `plans.example.json` (plan file format). |
 | `FOREVER_INTERFACE` | The game version the add-on supports, set in this one place. `tools/set_interface.py` copies it into the other files. |
