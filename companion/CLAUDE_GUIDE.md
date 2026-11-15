@@ -83,6 +83,8 @@ Known limits:
 
 ## 6. Writing advice into the game
 
+If the player uses automatic updates (`companion/auto/`), an unattended run may also change `plans.json` and the data file. Before you change `plans.json`, check that `.automation-running` is not in the plan file's folder (wait until it is gone), and re-read `plans.json` right before writing.
+
 Keep one plan file per player, `plans.json` (schema in section 7), in a place that persists between sessions. Generate the data file from it:
 
 ```
@@ -161,6 +163,8 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 ## Changelog
 
+- 0.12.1 — The panel's tabs never run past the window's edge: they keep their natural width when all six fit and share the width evenly otherwise, at every allowed size, and the plain fallback buttons do the same. A size saved by an older version is brought within today's limits when the panel opens.
+- 0.12.0 — The panel is a native game window (the approved mockup): the client's titled frame "AI Companion · name" with tabs along the bottom, the headline in a band, "N of M done", the next step highlighted with a "Next" label, an arrow on the right of each step (right when closed, down when open), finished steps greyed under a Done divider, Bags and "I can't see yet" at the end, and the footer "Snapshot today 17:44 · Plan Nov 14". Falls back to a plain window if the client lacks the templates. Needs a full restart.
 - 0.11.0 — Prices from Auctionator when the player has it, in `snapshot.auctionator`. The "check prices" button appears only when Auctionator is missing or its prices are older than `/aic ah age` (default 5 days), and `/aic ah` then checks only the rest. The add-on's own tooltip price line is left out for items Auctionator prices. Needs a full game restart once (`.toc` change).
 - 0.10.4 — Installing is one folder, `AICompanion`. `gen_data.py` creates `AICompanion_Data` and its `.toc` when missing, so an install or update can never replace the player's data. The data add-on's game version follows the installed add-on release. Snapshots record `client.dataAddon`.
 - 0.10.3 — Includes 0.9.2: using items from the bags is no longer blocked, and blocked actions are recorded in `blockedActions`. The panel's minimap button and window were checked against the same rule: they sit on the minimap edge and on UIParent and never touch a game window.

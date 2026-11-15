@@ -205,12 +205,23 @@ function Panel.model(plans, firstName, store, ticks, adviceFor, ruleFor)
     local function section(key) local t = {} m.sections[key] = t return t end
     if m.hasPlan then
         local t = section("next")
+        local open, done = {}, {}
         for i, step in ipairs(list(plan.next)) do
             if type(step) == "table" then
                 local line = stepLine(step, f, ticks, sources)
                 line.number = i
-                t[#t + 1] = line
+                if line.done then done[#done + 1] = line else open[#open + 1] = line end
             end
+        end
+        m.progress = { done = #done, total = #open + #done }
+        if m.progress.total > 0 then
+            t[#t + 1] = { kind = "progress", title = ("%d of %d done"):format(#done, m.progress.total) }
+        end
+        if open[1] then open[1].isNext = true end
+        for _, l in ipairs(open) do t[#t + 1] = l end
+        if #done > 0 then
+            t[#t + 1] = { kind = "divider", title = "Done" }
+            for _, l in ipairs(done) do t[#t + 1] = l end
         end
         t = section("questing")
         for _, group in ipairs(list(plan.questing)) do
@@ -279,18 +290,30 @@ function Panel.model(plans, firstName, store, ticks, adviceFor, ruleFor)
 end
 
 -------------------------------------------------------------------------------
--- Display
+-- Display: a native game window (the client's ButtonFrameTemplate with its tabs along the
+-- bottom edge, as on the character sheet), with a plain frame as the fallback.
 -------------------------------------------------------------------------------
 
 local FRAME_NAME = "AICompanionPanel"
-local DEFAULT_W, DEFAULT_H, MIN_W, MIN_H = 900, 700, 640, 480
--- Fonts: titles in the large font, headings larger still, nothing smaller than 12.
-local FONT_TITLE, FONT_HEADING, FONT_TEXT = "GameFontHighlightLarge", "GameFontNormalHuge", "GameFontHighlight"
-local DETAIL_GREY = 0.85
+local DEFAULT_W, MIN_W, MIN_H, MAX_DEFAULT_H = 780, 560, 360, 700
+local MAX_W, MAX_H = 1600, 1200
+local TAB_LEFT, TAB_GAP, FALLBACK_TAB_W = 11, 3, 104   -- tabs start 11 in and sit 3 apart, as on the character sheet
+local function clamp(v, lo, hi) return math.min(math.max(v, lo), hi) end
+local MARGIN = 14                 -- one left margin for banner, rows, headings and footer
+local ROW_H = 26                  -- even row height for one-line rows
+-- Fonts: step titles large; headings in the normal heading font, never larger than a title.
+local FONT_TITLE, FONT_HEADING, FONT_TEXT = "GameFontHighlightLarge", "GameFontNormal", "GameFontHighlight"
+local DETAIL_GREY, DONE_GREY = 0.85, 0.55
+local LIST_HIGHLIGHT = "Interface\\QuestFrame\\UI-QuestTitleHighlight"
+-- The row arrow: points right when the step is closed, down when it is open (the same art, turned).
+local ARROWS = { "Interface\\ChatFrame\\ChatFrameExpandArrow", "Interface\\Buttons\\UI-SpellbookIcon-NextPage-Up" }
+local DOT = " \194\183 "   -- " · " as UTF-8, which the game's fonts draw
 
-local frame, scroll, content, bar, tabs, pool = nil, nil, nil, nil, {}, {}
+local frame, body, scroll, content, bar, pool = nil, nil, nil, nil, nil, {}
+local tabs = {}
 local current, expanded = "next", nil
 local refreshTicker
+local render   -- defined below; rows refer to it when clicked
 
 local function panelDB()
     local DB = core().db and core().db()
@@ -317,61 +340,80 @@ local function currentModel()
 end
 Panel.currentModel = currentModel
 
+local function hasFile(path)
+    local id = type(GetFileIDFromPath) == "function" and GetFileIDFromPath(path) or nil
+    return type(id) == "number" and id > 0
+end
+
 local function actionLabel(action)
     if action == "none" then return "No advice yet" end
     local L = core().ADVICE_LABEL and core().ADVICE_LABEL[action]
     return L and L[1] or action
 end
 
--- A section of the model as display rows. Steps show one line (tick box, title, tag);
--- the expanded step also shows its detail and source.
--- Row: { key, text, sub, check = {id, done, auto}, heading, expandable }
+-- A section of the model as display rows.
+-- Row: { key, text, style = "step"|"heading"|"divider"|"progress"|"text", sub, check, done, isNext, expandable }
 function Panel.rows(m, key, open)
     local rows = {}
     local function add(r) rows[#rows + 1] = r end
     if key == "items" then
         for gi, g in ipairs(m.sections.items or {}) do
-            add({ key = "g" .. gi, text = actionLabel(g.action), heading = true })
+            add({ key = "g" .. gi, text = actionLabel(g.action), style = "heading" })
             for _, it in ipairs(g.items) do
                 local rkey = "item:" .. it.name
                 local sub
                 if open == rkey then
                     sub = it.note
-                    if it.rule and sub then sub = sub .. " (built-in rule)" end
                     if it.where == "bank" then sub = (sub and sub .. " " or "") .. "In the bank." end
                 end
-                add({ key = rkey, text = it.name .. (it.count > 1 and (" x" .. it.count) or ""), sub = sub,
+                add({ key = rkey, text = it.name .. (it.count > 1 and (" x" .. it.count) or ""), style = "step", sub = sub,
                       expandable = it.note ~= nil or it.where == "bank" })
             end
         end
-        if #rows == 0 then add({ key = "empty", text = "No snapshot of your bags yet. Type /aic to take one." }) end
+        if #rows == 0 then add({ key = "empty", text = "No snapshot of your bags yet. Type /aic to take one.", style = "text" }) end
         return rows
     end
     if not m.hasPlan then
-        add({ key = "noplan", text = "No plan for this character yet." })
+        add({ key = "noplan", text = "No plan for this character yet.", style = "text" })
         return rows
     end
     for i, l in ipairs(m.sections[key] or {}) do
         local rkey = l.id or (key .. ":" .. i)
         if l.kind == "heading" then
-            add({ key = rkey, text = l.title, heading = true, sub = l.detail })
-        elseif l.kind == "text" then
-            add({ key = rkey, text = l.title })
+            add({ key = rkey, text = l.title, style = "heading", sub = l.detail })
+        elseif l.kind == "divider" or l.kind == "progress" or l.kind == "text" then
+            add({ key = rkey, text = l.title, style = l.kind })
         else
             local more = {}
             if l.detail and l.detail ~= "" then more[#more + 1] = l.detail end
             if l.caution then more[#more + 1] = l.caution end
             if l.source then more[#more + 1] = l.source end
-            local title = (l.number and (l.number .. ". ") or "") .. l.title
-            add({ key = rkey, text = title,
+            add({ key = rkey, text = (l.number and (l.number .. ". ") or "") .. l.title, style = "step",
                   sub = (open == rkey and #more > 0) and table.concat(more, "\n") or nil,
                   expandable = #more > 0,
                   check = l.kind == "step" and { id = l.id, done = l.done, auto = l.auto } or nil,
-                  done = l.done })
+                  done = l.done, isNext = l.isNext })
         end
     end
-    if #rows == 0 then add({ key = "nothing", text = "Nothing planned here yet." }) end
+    if #rows == 0 then add({ key = "nothing", text = "Nothing planned here yet.", style = "text" }) end
     return rows
+end
+
+-- "Snapshot today 17:44 · Plan Nov 14" (or the snapshot's date when it is not today).
+function Panel.footer(takenAtText, asOf, today)
+    local parts = {}
+    if type(takenAtText) == "string" then
+        local day, hm = takenAtText:match("^(%d+%-%d+%-%d+) (%d+:%d+)")
+        if day then
+            parts[#parts + 1] = "Snapshot " .. (day == today and "today" or day) .. " " .. hm
+        else
+            parts[#parts + 1] = "Snapshot " .. takenAtText
+        end
+    else
+        parts[#parts + 1] = "No snapshot yet"
+    end
+    if type(asOf) == "string" and asOf ~= "" then parts[#parts + 1] = "Plan " .. asOf end
+    return table.concat(parts, DOT)
 end
 
 local function textHeight(fs, default)
@@ -383,56 +425,89 @@ local function rowFrame(i)
     local r = pool[i]
     if r then return r end
     r = CreateFrame("Button", nil, content)
+    r.bg = r:CreateTexture(nil, "BACKGROUND")            -- the next step's highlight
+    r.bg:SetAllPoints(r)
+    r.hl = r:CreateTexture(nil, "HIGHLIGHT")             -- hover
+    r.hl:SetAllPoints(r)
+    if hasFile(LIST_HIGHLIGHT) then
+        r.bg:SetTexture(LIST_HIGHLIGHT) r.bg:SetBlendMode("ADD")
+        r.hl:SetTexture(LIST_HIGHLIGHT) r.hl:SetBlendMode("ADD") r.hl:SetAlpha(0.5)
+    else
+        r.bg:SetColorTexture(1, 0.82, 0, 0.12)
+        r.hl:SetColorTexture(1, 1, 1, 0.07)
+    end
+    r.arrow = r:CreateTexture(nil, "ARTWORK")
+    r.arrow:SetSize(14, 14)
+    r.nextTag = r:CreateFontString(nil, "OVERLAY", FONT_TEXT)   -- the small "Next" label
+    r.nextTag:SetText("Next")
+    r.nextTag:SetTextColor(1, 0.82, 0)
     r.check = CreateFrame("CheckButton", nil, r, "UICheckButtonTemplate")
     r.check:SetSize(24, 24)
     r.title = r:CreateFontString(nil, "OVERLAY", FONT_TITLE)
     r.title:SetJustifyH("LEFT")
-    r.title:SetWordWrap(false)
     r.sub = r:CreateFontString(nil, "OVERLAY", FONT_TEXT)
     r.sub:SetJustifyH("LEFT")
     r.sub:SetWordWrap(true)
     r.sub:SetTextColor(DETAIL_GREY, DETAIL_GREY, DETAIL_GREY)
-    r.hl = r:CreateTexture(nil, "HIGHLIGHT")
-    r.hl:SetAllPoints(r)
-    r.hl:SetColorTexture(1, 1, 1, 0.06)
+    r.line = r:CreateTexture(nil, "ARTWORK")             -- the "Done" divider rule
+    r.line:SetHeight(1)
+    r.line:SetColorTexture(1, 1, 1, 0.15)
     pool[i] = r
     return r
 end
 
+local function listHeight()
+    local h = scroll and scroll:GetHeight()
+    if type(h) == "number" and h > 0 then return h end
+    return (frame:GetHeight() or MAX_DEFAULT_H) - 170
+end
+
 local function updateBar()
     if not (scroll and bar) then return end
-    local visible = scroll:GetHeight() or ((frame:GetHeight() or DEFAULT_H) - 150)
-    local range = math.max(0, (content.fullHeight or 0) - visible)
+    local range = math.max(0, (content.fullHeight or 0) - listHeight())
     bar:SetMinMaxValues(0, range)
     if range <= 0 then bar:Hide() scroll:SetVerticalScroll(0) bar:SetValue(0) else bar:Show() end
     if (bar:GetValue() or 0) > range then bar:SetValue(range) end
 end
 
-local render
-render = function()
-    if not frame or not frame:IsShown() then return end
-    local m, ticks = currentModel()
-    if not m then return end
-    frame.title:SetText("AI Companion: " .. tostring(m.name))
-    frame.headline:SetText(m.headline or "")
-    frame.footer:SetText(m.takenAt and ("Snapshot " .. m.takenAt .. (m.asOf and ("   Plan " .. m.asOf) or "")) or "No snapshot yet")
-    for key, tab in pairs(tabs) do
-        if key == current then tab:LockHighlight() else tab:UnlockHighlight() end
-    end
-    local rows = Panel.rows(m, current, expanded)
-    frame.lastRows = rows
-    local width = (frame:GetWidth() or DEFAULT_W) - 64
-    content:SetWidth(width)
+-- Lay the rows out; returns the list's full height.
+local function layout(rows, width, ticks)
     local y = 0
     for i, r in ipairs(rows) do
         local f = rowFrame(i)
-        local x = 6
         f:ClearAllPoints()
         f:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -y)
         f:SetWidth(width)
+        local x = MARGIN
+        local step = r.style == "step"
+        f.bg:SetShown(r.isNext == true)
+        f.hl:SetShown(step and r.expandable == true)
+        f.line:Hide()
+        -- expand arrow on the right, so it is clear the row opens: right when closed, down when open
+        local right = MARGIN
+        if step and r.expandable then
+            f.arrow:ClearAllPoints()
+            f.arrow:SetPoint("TOPRIGHT", f, "TOPRIGHT", -MARGIN, -7)
+            local art
+            for _, path in ipairs(ARROWS) do if hasFile(path) then art = path break end end
+            if art then f.arrow:SetTexture(art) else f.arrow:SetColorTexture(1, 1, 1, 0.4) end
+            f.arrow:SetRotation(r.sub ~= nil and -math.pi / 2 or 0)
+            f.arrow:Show()
+            right = right + 20
+        else
+            f.arrow:Hide()
+        end
+        if r.isNext then
+            f.nextTag:ClearAllPoints()
+            f.nextTag:SetPoint("TOPRIGHT", f, "TOPRIGHT", -right, -8)
+            f.nextTag:Show()
+            right = right + 40
+        else
+            f.nextTag:Hide()
+        end
         if r.check then
             f.check:ClearAllPoints()
-            f.check:SetPoint("TOPLEFT", f, "TOPLEFT", x, 0)
+            f.check:SetPoint("TOPLEFT", f, "TOPLEFT", x, -1)
             f.check:SetChecked(r.check.done == true)
             f.check:SetEnabled(not r.check.auto and r.check.id ~= nil)
             f.check:SetScript("OnClick", function(btn)
@@ -441,26 +516,38 @@ render = function()
                 render()
             end)
             f.check:Show()
-            x = x + 30
+            x = x + 28
         else
             f.check:Hide()
         end
-        f.title:SetFontObject(r.heading and FONT_HEADING or FONT_TITLE)
+        local font = FONT_TITLE
+        if r.style == "heading" or r.style == "divider" then font = FONT_HEADING
+        elseif r.style == "text" or r.style == "progress" then font = FONT_TEXT end
+        local tx = (step or r.check) and x or MARGIN
+        f.title:SetFontObject(font)
         f.title:ClearAllPoints()
-        f.title:SetPoint("TOPLEFT", f, "TOPLEFT", x, -3)
-        f.title:SetWidth(width - x - 12)
+        f.title:SetPoint("TOPLEFT", f, "TOPLEFT", tx, -5)
+        f.title:SetWidth(width - tx - right)
+        f.title:SetWordWrap(not step)                    -- step titles are one line; everything else wraps
         f.title:SetText(r.text or "")
-        if r.heading then f.title:SetTextColor(1, 0.82, 0)
-        elseif r.done then f.title:SetTextColor(0.55, 0.85, 0.55)
+        if r.style == "heading" or r.style == "divider" then f.title:SetTextColor(1, 0.82, 0)
+        elseif r.done then f.title:SetTextColor(DONE_GREY, DONE_GREY, DONE_GREY)
+        elseif r.style == "progress" then f.title:SetTextColor(DETAIL_GREY, DETAIL_GREY, DETAIL_GREY)
         else f.title:SetTextColor(1, 1, 1) end
-        local h = math.max(textHeight(f.title, r.heading and 22 or 18), 24) + 4
+        local h = math.max(textHeight(f.title, 18) + 8, step and ROW_H or 20)
+        if r.style == "divider" then
+            f.line:ClearAllPoints()
+            f.line:SetPoint("LEFT", f.title, "RIGHT", 8, 0)
+            f.line:SetPoint("RIGHT", f, "RIGHT", -MARGIN, 0)
+            f.line:Show()
+        end
         if r.sub then
             f.sub:ClearAllPoints()
-            f.sub:SetPoint("TOPLEFT", f, "TOPLEFT", x, -h)
-            f.sub:SetWidth(width - x - 12)
+            f.sub:SetPoint("TOPLEFT", f, "TOPLEFT", x + 8, -h)    -- indented under the title
+            f.sub:SetWidth(width - x - 8 - MARGIN)
             f.sub:SetText(r.sub)
             f.sub:Show()
-            h = h + textHeight(f.sub, 14) + 6
+            h = h + textHeight(f.sub, 14) + 8
         else
             f.sub:Hide()
         end
@@ -474,6 +561,33 @@ render = function()
         y = y + h + 2
     end
     for i = #rows + 1, #pool do pool[i]:Hide() end
+    return y
+end
+
+render = function()
+    if not frame or not frame:IsShown() then return end
+    local m, ticks = currentModel()
+    if not m then return end
+    local title = "AI Companion" .. DOT .. tostring(m.name)
+    if frame.SetTitle then frame:SetTitle(title) elseif frame.titleText then frame.titleText:SetText(title) end
+    frame.headline:SetText(m.headline or "")
+    frame.footer:SetText(Panel.footer(m.takenAt, m.asOf, date("%Y-%m-%d")))
+    for i, s in ipairs(Panel.SECTIONS) do
+        if s.key == current then frame.selectedTabIndex = i end
+    end
+    if frame.nativeTabs and type(PanelTemplates_SetTab) == "function" then
+        pcall(PanelTemplates_SetTab, frame, frame.selectedTabIndex or 1)
+    else
+        for key, tab in pairs(tabs) do
+            if key == current then tab:LockHighlight() else tab:UnlockHighlight() end
+        end
+    end
+    pcall(fitTabs, frame)
+    local rows = Panel.rows(m, current, expanded)
+    frame.lastRows = rows
+    local width = (frame:GetWidth() or DEFAULT_W) - 2 * MARGIN - 30
+    content:SetWidth(width)
+    local y = layout(rows, width, ticks)
     content.fullHeight = y
     content:SetHeight(math.max(y, 10))
     updateBar()
@@ -486,72 +600,170 @@ local function savePosition()
     local point, _, relPoint, x, y = frame:GetPoint(1)
     if point then pdb.point = { point, relPoint, x, y } end
     local w, h = frame:GetWidth(), frame:GetHeight()
-    if w and h then pdb.width, pdb.height = math.max(w, MIN_W), math.max(h, MIN_H) end
+    if w and h then pdb.width, pdb.height = clamp(w, MIN_W, MAX_W), clamp(h, MIN_H, MAX_H) end
 end
 
-local function build()
-    if frame then return frame end
-    local pdb = panelDB() or {}
-    local f = CreateFrame("Frame", FRAME_NAME, UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
-    f:SetSize(math.max(pdb.width or DEFAULT_W, MIN_W), math.max(pdb.height or DEFAULT_H, MIN_H))
-    if type(pdb.point) == "table" then f:SetPoint(pdb.point[1], UIParent, pdb.point[2], pdb.point[3], pdb.point[4])
-    else f:SetPoint("CENTER") end
-    f:SetFrameStrata("DIALOG")
-    f:SetClampedToScreen(true)
+-- Default height: what the Do next tab needs, between the minimum and 700.
+local CHROME_H = 200
+function Panel.defaultHeight(m)
+    local n = 0
+    for _ in ipairs(Panel.rows(m or { sections = {} }, "next", nil)) do n = n + 1 end
+    return math.min(math.max(CHROME_H + n * (ROW_H + 2), MIN_H), MAX_DEFAULT_H)
+end
+
+-- The window: the client's titled frame with an inset, or a plain frame when that template is missing.
+local function makeWindow()
+    local ok, f = pcall(CreateFrame, "Frame", FRAME_NAME, UIParent, "ButtonFrameTemplate")
+    if ok and type(f) == "table" and f.Inset then
+        if type(ButtonFrameTemplate_HidePortrait) == "function" then pcall(ButtonFrameTemplate_HidePortrait, f) end
+        if type(ButtonFrameTemplate_HideButtonBar) == "function" then pcall(ButtonFrameTemplate_HideButtonBar, f) end
+        return f, f.Inset, "ButtonFrameTemplate"
+    end
+    f = (ok and type(f) == "table") and f or CreateFrame("Frame", FRAME_NAME, UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
     if f.SetBackdrop then
         f:SetBackdrop({ bgFile = "Interface\\ChatFrame\\ChatFrameBackground", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
                         edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 } })
         f:SetBackdropColor(0.05, 0.05, 0.07, 0.95)
     end
-    f:EnableMouse(true)
-    f:SetMovable(true)
-    f:SetResizable(true)
-    if f.SetResizeBounds then f:SetResizeBounds(MIN_W, MIN_H, 1600, 1200) end
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", function(self) self:StartMoving() end)
-    f:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() savePosition() end)
-    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    f.title:SetPoint("TOPLEFT", 16, -14)
+    f.titleText = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    f.titleText:SetPoint("TOP", f, "TOP", 0, -8)
     local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -2, -2)
     close:SetScript("OnClick", function() f:Hide() end)
-    -- headline: two lines at most, with its own space above the tabs
-    f.headline = f:CreateFontString(nil, "OVERLAY", FONT_TITLE)
-    f.headline:SetPoint("TOPLEFT", 16, -40)
-    f.headline:SetPoint("RIGHT", f, "RIGHT", -16, 0)
-    f.headline:SetHeight(44)
-    f.headline:SetJustifyH("LEFT")
-    f.headline:SetJustifyV("TOP")
-    f.headline:SetWordWrap(true)
-    if f.headline.SetMaxLines then f.headline:SetMaxLines(2) end
+    local inner = CreateFrame("Frame", nil, f)
+    inner:SetPoint("TOPLEFT", 6, -28)
+    inner:SetPoint("BOTTOMRIGHT", -6, 8)
+    return f, inner, "plain"
+end
+
+-- Tabs: the client's own tab buttons along the bottom edge, or plain buttons as the fallback.
+-- The tabs never run past the window's right edge: they keep their natural width when all six
+-- fit, and otherwise share the width evenly. Runs whenever the panel is drawn or resized.
+local function fitTabs(f)
+    local w = f:GetWidth()
+    if type(w) ~= "number" or #f.Tabs == 0 then return end
+    local avail = w - 2 * TAB_LEFT - TAB_GAP * (#f.Tabs - 1)
+    if f.nativeTabs then
+        local total = 0
+        for _, b in ipairs(f.Tabs) do
+            pcall(PanelTemplates_TabResize, b, 0)
+            total = total + (b:GetWidth() or 0)
+        end
+        if total > avail then
+            local each = math.floor(avail / #f.Tabs)
+            for _, b in ipairs(f.Tabs) do pcall(PanelTemplates_TabResize, b, 0, each) end
+        end
+    else
+        local each = math.min(FALLBACK_TAB_W, math.floor(avail / #f.Tabs))
+        for _, b in ipairs(f.Tabs) do b:SetWidth(each) end
+    end
+end
+Panel.fitTabs = function() if frame then fitTabs(frame) end end
+
+local function makeTabs(f)
+    f.Tabs = f.Tabs or {}
+    local native = true
     local prev
-    for _, s in ipairs(Panel.SECTIONS) do
+    for i, s in ipairs(Panel.SECTIONS) do
+        local ok, b = pcall(CreateFrame, "Button", FRAME_NAME .. "Tab" .. i, f, "PanelTabButtonTemplate")
+        if not (ok and type(b) == "table") then native = false break end
+        b:SetID(i)
+        b:SetText(s.label)
+        if type(PanelTemplates_TabResize) == "function" then pcall(PanelTemplates_TabResize, b, 0) end
+        b:ClearAllPoints()
+        if prev then b:SetPoint("TOPLEFT", prev, "TOPRIGHT", TAB_GAP, 0) else b:SetPoint("TOPLEFT", f, "BOTTOMLEFT", TAB_LEFT, 2) end
+        b:SetScript("OnClick", function() current, expanded = s.key, nil render() end)
+        f.Tabs[i] = b
+        tabs[s.key] = b
+        prev = b
+    end
+    if native and type(PanelTemplates_SetNumTabs) == "function" then
+        native = pcall(PanelTemplates_SetNumTabs, f, #Panel.SECTIONS)
+    end
+    if native then return true end
+    -- fallback: a row of standard buttons inside the window
+    for _, b in pairs(tabs) do b:Hide() end
+    tabs, prev = {}, nil
+    f.Tabs = {}
+    for i, s in ipairs(Panel.SECTIONS) do
         local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        b:SetSize(104, 26)
-        if prev then b:SetPoint("LEFT", prev, "RIGHT", 4, 0) else b:SetPoint("TOPLEFT", 14, -90) end
+        b:SetSize(FALLBACK_TAB_W, 24)
+        if prev then b:SetPoint("LEFT", prev, "RIGHT", TAB_GAP, 0) else b:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", TAB_LEFT, 8) end
+        f.Tabs[i] = b
         b:SetText(s.label)
         b:SetScript("OnClick", function() current, expanded = s.key, nil render() end)
         tabs[s.key] = b
         prev = b
     end
-    -- the list, with its own scroll bar (a visible track and thumb) and mouse-wheel scrolling
-    scroll = CreateFrame("ScrollFrame", nil, f)
-    scroll:SetPoint("TOPLEFT", 16, -126)
-    scroll:SetPoint("BOTTOMRIGHT", -34, 40)
+    return false
+end
+
+local function build()
+    if frame then return frame end
+    local pdb = panelDB() or {}
+    local f, inner, kind = makeWindow()
+    body = inner
+    local m = currentModel()
+    -- a size saved by an older version (other limits) is brought within today's
+    local w = clamp(tonumber(pdb.width) or DEFAULT_W, MIN_W, MAX_W)
+    local h = clamp(tonumber(pdb.height) or Panel.defaultHeight(m), MIN_H, MAX_H)
+    if pdb.width ~= nil then pdb.width = w end
+    if pdb.height ~= nil then pdb.height = h end
+    f:SetSize(w, h)
+    if type(pdb.point) == "table" then f:SetPoint(pdb.point[1], UIParent, pdb.point[2], pdb.point[3], pdb.point[4])
+    else f:SetPoint("CENTER") end
+    f:SetFrameStrata("DIALOG")
+    f:SetClampedToScreen(true)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:SetResizable(true)
+    if f.SetResizeBounds then f:SetResizeBounds(MIN_W, MIN_H, MAX_W, MAX_H) end
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    f:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() savePosition() end)
+    if f.CloseButton then f.CloseButton:SetScript("OnClick", function() f:Hide() end) end
+    -- headline banner under the title bar: a subtle band with a divider below
+    local banner = CreateFrame("Frame", nil, inner)
+    banner:SetPoint("TOPLEFT", inner, "TOPLEFT", 0, 0)
+    banner:SetPoint("TOPRIGHT", inner, "TOPRIGHT", 0, 0)
+    banner:SetHeight(50)
+    local band = banner:CreateTexture(nil, "BACKGROUND")
+    band:SetAllPoints(banner)
+    band:SetColorTexture(1, 1, 1, 0.04)
+    local rule = banner:CreateTexture(nil, "ARTWORK")
+    rule:SetHeight(1)
+    rule:SetPoint("BOTTOMLEFT", banner, "BOTTOMLEFT", MARGIN, 0)
+    rule:SetPoint("BOTTOMRIGHT", banner, "BOTTOMRIGHT", -MARGIN, 0)
+    rule:SetColorTexture(1, 0.82, 0, 0.35)
+    f.headline = banner:CreateFontString(nil, "OVERLAY", FONT_TITLE)
+    f.headline:SetPoint("TOPLEFT", banner, "TOPLEFT", MARGIN, -8)
+    f.headline:SetPoint("BOTTOMRIGHT", banner, "BOTTOMRIGHT", -MARGIN, 6)
+    f.headline:SetJustifyH("LEFT")
+    f.headline:SetJustifyV("TOP")
+    f.headline:SetWordWrap(true)
+    if f.headline.SetMaxLines then f.headline:SetMaxLines(2) end
+    f.nativeTabs = makeTabs(f)
+    fitTabs(f)
+    f:SetScript("OnSizeChanged", function() pcall(fitTabs, f) end)
+    -- the list, with its own scroll bar (visible track and thumb) and mouse-wheel scrolling
+    local bottom = f.nativeTabs and 30 or 40
+    scroll = CreateFrame("ScrollFrame", nil, inner)
+    scroll:SetPoint("TOPLEFT", banner, "BOTTOMLEFT", 0, -6)
+    scroll:SetPoint("BOTTOMRIGHT", inner, "BOTTOMRIGHT", -20, bottom)
     content = CreateFrame("Frame", nil, scroll)
-    content:SetSize(DEFAULT_W - 64, 10)
+    content:SetSize(DEFAULT_W - 60, 10)
     scroll:SetScrollChild(content)
-    bar = CreateFrame("Slider", nil, f)
+    bar = CreateFrame("Slider", nil, inner)
     bar:SetOrientation("VERTICAL")
-    bar:SetWidth(12)
-    bar:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -126)
-    bar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14, 40)
+    bar:SetWidth(10)
+    bar:SetPoint("TOPRIGHT", banner, "BOTTOMRIGHT", -6, -6)
+    bar:SetPoint("BOTTOMRIGHT", inner, "BOTTOMRIGHT", -6, bottom)
     local track = bar:CreateTexture(nil, "BACKGROUND")
     track:SetAllPoints(bar)
-    track:SetColorTexture(0.2, 0.2, 0.22, 0.9)
+    track:SetColorTexture(0, 0, 0, 0.45)
     local thumb = bar:CreateTexture(nil, "OVERLAY")
-    thumb:SetColorTexture(0.75, 0.75, 0.78, 1)
-    thumb:SetSize(12, 48)
+    thumb:SetColorTexture(0.75, 0.66, 0.4, 1)
+    thumb:SetSize(10, 48)
     bar:SetThumbTexture(thumb)
     bar:SetValueStep(1)
     bar:SetMinMaxValues(0, 0)
@@ -564,10 +776,15 @@ local function build()
         bar:SetValue(v)
         scroll:SetVerticalScroll(v)
     end)
-    -- footer strip: one line, below the list, never under it
-    f.footer = f:CreateFontString(nil, "OVERLAY", FONT_TEXT)
-    f.footer:SetPoint("BOTTOMLEFT", 16, 14)
-    f.footer:SetPoint("RIGHT", f, "RIGHT", -40, 0)
+    -- footer strip: one line at the bottom of the content area, never under the list
+    local strip = inner:CreateTexture(nil, "ARTWORK")
+    strip:SetHeight(1)
+    strip:SetPoint("BOTTOMLEFT", inner, "BOTTOMLEFT", MARGIN, bottom - 4)
+    strip:SetPoint("BOTTOMRIGHT", inner, "BOTTOMRIGHT", -MARGIN, bottom - 4)
+    strip:SetColorTexture(1, 1, 1, 0.1)
+    f.footer = inner:CreateFontString(nil, "OVERLAY", FONT_TEXT)
+    f.footer:SetPoint("BOTTOMLEFT", inner, "BOTTOMLEFT", MARGIN, bottom - 22)
+    f.footer:SetPoint("RIGHT", inner, "RIGHT", -MARGIN, 0)
     f.footer:SetJustifyH("LEFT")
     f.footer:SetWordWrap(false)
     f.footer:SetTextColor(0.7, 0.7, 0.7)
@@ -590,6 +807,8 @@ local function build()
     end)
     -- Escape closes it, like the game's own windows.
     if type(UISpecialFrames) == "table" then table.insert(UISpecialFrames, FRAME_NAME) end
+    local DB = core().db and core().db()
+    if type(DB) == "table" then DB.panelFrame = kind .. (f.nativeTabs and ", native tabs" or ", plain tabs") end
     f:Hide()
     frame = f
     return f
