@@ -50,15 +50,20 @@ def to_py(value):
 
 
 class Game:
-    def __init__(self, world, saved=None, data_source=None):
+    def __init__(self, world, saved=None, data_source=None, with_data=True):
         self.world = copy.deepcopy(world)
         self.saved = saved or {}            # SavedVariables name -> file text
         self.data_source = data_source       # replacement AICompanion_Data.lua text, if any
+        self.with_data = with_data           # False: the AICompanion_Data folder is not installed
         self.lua = None
         self.reloads = 0
         self.lua_prelude = None              # Lua run after the stand-in client loads, before the add-ons
 
     # ------------------------------------------------------------------ startup
+
+    def addons(self):
+        """The add-ons installed, in load order."""
+        return ("AICompanion_Data", "AICompanion") if self.with_data else ("AICompanion",)
 
     def start(self):
         """Start the client: load add-ons and their SavedVariables, log in, settle for 6 seconds."""
@@ -72,7 +77,7 @@ class Game:
         allowed = self.lua.table_from({k: True for k in DECLARED_GLOBALS})
         self.M.trackGlobals(allowed)
         self.ns = {}
-        for addon in ("AICompanion_Data", "AICompanion"):
+        for addon in self.addons():
             files, saved_names = toc_files(addon)
             ns = self.lua.table()
             self.ns[addon] = ns
@@ -126,7 +131,7 @@ class Game:
         self.fire("PLAYER_LEAVING_WORLD")
         self.fire("PLAYER_LOGOUT")
         self.check_clean()
-        for addon in ("AICompanion_Data", "AICompanion"):
+        for addon in self.addons():
             for name in toc_files(addon)[1]:
                 value = self.lua.globals()[name]
                 if value is not None:

@@ -5,7 +5,7 @@
 
 local ADDON_NAME, ns = ...
 ns = type(ns) == "table" and ns or {}
-local VERSION = "0.10.3"
+local VERSION = "0.10.4"
 local PREFIX = "|cff66ccffAI Companion|r: "
 
 local DB            -- AICompanionDB once loaded
@@ -657,6 +657,9 @@ local function scanClient()
         projectID = WOW_PROJECT_ID, camelotProjectID = WOW_PROJECT_CAMELOT,
         locale = try(GetLocale),
         addonVersion = VERSION,
+        -- false when the AICompanion_Data add-on is missing or not ticked; the companion creates it
+        dataAddon = type(AICompanionAdvice) == "table" or type(AICompanionPlans) == "table"
+            or type(AICompanionShopping) == "table",
     }
 end
 

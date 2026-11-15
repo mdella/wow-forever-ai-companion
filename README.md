@@ -24,11 +24,13 @@ Nothing is sent anywhere by the add-on. The game does not let add-ons use the ne
 1. Close the game.
 2. Download this repository (Code, then Download ZIP) and unzip it.
 3. Find the `_forever_` folder inside your game folder. On Windows it is usually `C:\Program Files (x86)\World of Warcraft\_forever_`.
-4. Copy the two folders inside `AddOns` (`AICompanion` and `AICompanion_Data`) into `_forever_\Interface\AddOns`.
-5. Start the game. On the character screen, open AddOns and check that "AI Companion" and "AI Companion Data" are both ticked.
+4. Copy the `AICompanion` folder from inside `AddOns` into `_forever_\Interface\AddOns`. That's the only folder you install.
+5. Start the game. On the character screen, open AddOns and check that "AI Companion" is ticked.
 6. Log in and type `/aic save`. The screen reloads for a second. That writes your first snapshot.
 
-When you update later, replace only the `AICompanion` folder. `AICompanion_Data` holds your own advice and shopping lists.
+If you use Claude, it creates a second folder, `AICompanion_Data`, the first time it writes advice for you. That folder holds your own advice, shopping lists and plan. Restart the game once when Claude asks, and tick "AI Companion Data" too.
+
+When you update later, replace only the `AICompanion` folder. Never replace or delete `AICompanion_Data`.
 
 ## Use it with Claude
 
@@ -78,9 +80,10 @@ Auction 7c (2653 listed, 34m ago)          vendor 1c
 | Path | What |
 |---|---|
 | `AddOns/AICompanion/` | The add-on: `AICompanion.lua` (snapshots, auction check, tooltips) and `AICompanion_Rules.lua` (built-in advice rules). |
-| `AddOns/AICompanion_Data/` | Your shopping lists and item advice. Ships empty. |
+| `AddOns/AICompanion_Data/` | Empty template of the data add-on, used by the tests. Not installed; your companion creates your own copy. |
 | `companion/CLAUDE_GUIDE.md` | Instructions for the assistant. |
 | `companion/` | Tools the assistant uses: `gen_data.py` (writes the data add-on from a plan file), `build.py` and `template.html` (dashboard), `plans.example.json` (plan file format). |
+| `FOREVER_INTERFACE` | The game version the add-on supports, set in this one place. `tools/set_interface.py` copies it into the other files. |
 | `tests/` | Automated checks: the add-on run inside a stand-in game client. Run on every change. |
 
 ## License

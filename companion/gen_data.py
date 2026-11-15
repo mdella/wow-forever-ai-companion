@@ -1,8 +1,31 @@
 """Writes the AICompanion_Data add-on file (shopping lists, per-item advice and the plan shown in
 the in-game panel) from the plan file.
-Usage: python3 gen_data.py plans.json <path to AICompanion_Data.lua>"""
-import json, sys, datetime, os
+Usage: python3 gen_data.py plans.json <path to AICompanion_Data.lua>
+The AICompanion_Data folder is not part of installing the add-on. If the folder or its .toc is
+missing, this creates them and says so: a new folder needs a full game restart, once.
+The data add-on's "## Interface:" always follows the installed AICompanion release's .toc, never
+the game's own version: supporting a new game version is a tested add-on release."""
+import json, sys, datetime, os, re
 plans, target = sys.argv[1], sys.argv[2]
+# The template's text, with the interface number filled in (a test checks it matches the repository's).
+TOC = """## Interface: {interface}
+## Title: AI Companion Data
+## Notes: Your own shopping lists and item advice for AI Companion, written by your AI companion. Updating AI Companion never touches this folder.
+## Version: 1
+
+AICompanion_Data.lua
+"""
+INTERFACE_LINE = re.compile(r"^## Interface:[ \t]*(.*?)[ \t]*$", re.M)
+def addon_interface(data_folder):
+    """The "## Interface:" of the installed AICompanion next to the data folder; else the one
+    released with this tool. Returns (value, path read)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for toc in (os.path.join(os.path.dirname(data_folder), "AICompanion", "AICompanion.toc"),
+                os.path.join(here, "..", "AddOns", "AICompanion", "AICompanion.toc")):
+        if os.path.exists(toc):
+            m = INTERFACE_LINE.search(open(toc, encoding="utf-8-sig").read())
+            if m and m.group(1): return m.group(1), os.path.normpath(toc)
+    sys.exit("cannot find AICompanion.toc to read its ## Interface: line")
 d = json.load(open(plans, encoding="utf-8"))
 ACTIONS = {"equip", "use", "craft", "sell", "auction", "mail", "bank", "quest", "carry", "check"}
 REPL = {"\u2014": ", ", "\u2013": "-", "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"', "\u00d7": "x", "\u2026": "...", "\u00a0": " "}
@@ -55,7 +78,26 @@ out += ["AICompanionPlans = {",
         "    sources = %s," % lua(d.get("sources") or {}, "    "),
         "    characters = %s," % lua(plans, "    "),
         "}", ""]
+folder = os.path.dirname(os.path.abspath(target))
+interface, interface_from = addon_interface(folder)
+restart = None
+os.makedirs(folder, exist_ok=True)
+toc = os.path.join(folder, "AICompanion_Data.toc")
+if not os.path.exists(toc):
+    open(toc, "w", encoding="utf-8", newline="\n").write(TOC.format(interface=interface))
+    restart = "created the AICompanion_Data add-on in %s" % folder
+else:
+    text = open(toc, encoding="utf-8-sig").read()
+    m = INTERFACE_LINE.search(text)
+    if not m or m.group(1) != interface:       # only the interface line changes; the rest is kept
+        line = "## Interface: " + interface
+        text = INTERFACE_LINE.sub(line, text, count=1) if m else line + "\n" + text
+        open(toc + ".new", "w", encoding="utf-8", newline="\n").write(text)
+        os.replace(toc + ".new", toc)
+        restart = "updated AICompanion_Data.toc to interface %s (from %s)" % (interface, interface_from)
 tmp = target + ".new"
 open(tmp, "w", encoding="utf-8", newline="\n").write("\n".join(out))
 os.replace(tmp, target)
 print("wrote", target, "advice entries:", n, "plans:", len(plans))
+if restart:
+    print(restart, "- the player must fully restart the game and tick AI Companion Data under AddOns")
