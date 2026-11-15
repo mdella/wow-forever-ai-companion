@@ -20,7 +20,7 @@ PLACES = [
     ("tests/mock_wow.lua", r"(client interface )\d+"),
     ("README.md", r"(client interface )\d+"),
     ("CLAUDE.md", r"(Client interface )\d+"),
-    ("companion/CLAUDE_GUIDE.md", r"(client interface )\d+"),
+    ("companion/COMPANION_GUIDE.md", r"(client interface )\d+"),
 ]
 
 

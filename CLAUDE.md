@@ -2,6 +2,8 @@
 
 This is the AI Companion add-on for **World of Warcraft: Forever** and the tools an assistant uses with it. The owner is a product manager who does not read or write code and does not run commands. Explain outcomes, not code.
 
+Codex and other coding agents enter through `AGENTS.md`, which points here for the same development rules. Gameplay rules and file schemas live in `companion/COMPANION_GUIDE.md`; provider-specific setup lives in `companion/CLAUDE_GUIDE.md` and `companion/CODEX_GUIDE.md`.
+
 ## Rules
 
 1. **Forever only.** Client interface 16001. The client uses the modern (Mainline-style) add-on API: `C_Container`, `C_Traits`, `C_AuctionHouse`, `C_TooltipInfo`, `TooltipDataProcessor`. Do not assume a Classic or retail API exists; guard every game call with `pcall` (the `try` helper) and degrade to no output.
@@ -15,12 +17,12 @@ This is the AI Companion add-on for **World of Warcraft: Forever** and the tools
 8. **Auction queries** must set the quality filters or they return nothing, run one name at a time, and respect the throttle.
    - **Auctionator** is optional and used only through its public functions (`Auctionator.API.v1`), each call in `pcall`, with the add-on's name as caller. Never read its saved files. Missing functions or errors count as "no Auctionator": the add-on's own check takes over.
 9. **Never taint the game's frames.** Add-on frames are children of `UIParent` (or sit on the minimap edge, as minimap buttons do) and are placed by reading a game window's position (`GetRight`, `GetTop`), never anchored to, parented to, or written onto a game window, and nothing hooks the game's bag-opening functions. Touching the bag windows made the game block using items from the bags (issue #15). The stand-in client refuses these patterns, and the add-on records any blocked action in `AICompanionDB.blockedActions`.
-10. **Agent-facing documents** (`companion/CLAUDE_GUIDE.md`, this file) state rules as rules, with the changelog at the end.
+10. **Agent-facing documents** (`AGENTS.md`, the guides in `companion/`, this file) state rules as rules, with the changelog at the end.
 11. **Install is one folder.** Only `AddOns/AICompanion` is installed or packaged. `AddOns/AICompanion_Data/` is the template the tests load; on a player's PC `companion/gen_data.py` creates that folder and never replaces the player's data. The data add-on's `## Interface:` follows the installed `AICompanion.toc`, never the game's own version: supporting a new game version is an add-on release (see "Supporting a new Forever version"). `gen_data.py` then updates only that line of the player's data `.toc`. Keep the rest of the `.toc` text in `gen_data.py` identical to the template's (a test checks this). The add-on must work with the data add-on absent.
 
 ## Supporting a new Forever version
 
-The supported client interface is set in one place: the `FOREVER_INTERFACE` file at the repository root. `tools/set_interface.py` copies it into every file that states it (both `.toc` files, the stand-in client, `README.md`, this file, `companion/CLAUDE_GUIDE.md`). A test fails if any of them disagrees. Never edit the number anywhere else.
+The supported client interface is set in one place: the `FOREVER_INTERFACE` file at the repository root. `tools/set_interface.py` copies it into every file that states it (both `.toc` files, the stand-in client, `README.md`, this file, `companion/COMPANION_GUIDE.md`). A test fails if any of them disagrees. Never edit the number anywhere else.
 
 1. Refresh `tests/forever/api_names.json` from the patched game (rule 1) and fix what the tests then find.
 2. Run `python3 tools/set_interface.py <new number>`.
