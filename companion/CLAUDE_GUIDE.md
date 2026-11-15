@@ -81,6 +81,8 @@ Known limits:
 
 ## 6. Writing advice into the game
 
+If the player uses automatic updates (`companion/auto/`), an unattended run may also change `plans.json` and the data file. Before you change `plans.json`, check that `.automation-running` is not in the plan file's folder (wait until it is gone), and re-read `plans.json` right before writing.
+
 Keep one plan file per player, `plans.json` (schema in section 7), in a place that persists between sessions. Generate the data file from it:
 
 ```
