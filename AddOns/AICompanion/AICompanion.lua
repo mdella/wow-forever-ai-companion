@@ -3,8 +3,9 @@
 -- on /reload or logout) so an out-of-game AI companion can read it.
 -- It never automates gameplay: it only reads data the game already shows you.
 
-local ADDON_NAME = ...
-local VERSION = "0.9.0"
+local ADDON_NAME, ns = ...
+ns = type(ns) == "table" and ns or {}
+local VERSION = "0.10.0"
 local PREFIX = "|cff66ccffAI Companion|r: "
 
 local DB            -- AICompanionDB once loaded
@@ -1561,6 +1562,8 @@ local function handleSlash(msg)
         ahStart()
     elseif cmd == "sort" then
         sortStart()
+    elseif cmd == "panel" then
+        if ns.panel and ns.panel.toggle then ns.panel.toggle() else say("the panel is not loaded; restart the game once after updating.") end
     elseif cmd == "probe" then
         local ok, res = pcall(probeAPI)
         if ok then DB.apiProbe = clean(res) say("interface probe stored (" .. #res.namespaces .. " namespaces).")
@@ -1573,8 +1576,18 @@ local function handleSlash(msg)
         print("  /aic ask <q>    note a question for your companion")
         print("  /aic ah         at an auctioneer: check prices for your bags, bank and shopping list")
         print("  /aic sort       group your bags by advice: sell, auction, mail, bank, use, craft, quest, keep")
+        print("  /aic panel      open or close your companion panel (also the minimap button)")
     end
 end
+
+-- What AICompanion_Panel.lua needs from this file.
+ns.core = {
+    db = function() return DB end,
+    charKey = function() return charKey end,
+    adviceFor = adviceFor, ruleFor = ruleFor, say = say, try = try, isSecret = isSecret,
+    takeSnapshot = function(reason) return takeSnapshot(reason) end,
+    ADVICE_LABEL = ADVICE_LABEL,
+}
 
 SLASH_AICOMPANION1 = "/aic"
 SLASH_AICOMPANION2 = "/companion"

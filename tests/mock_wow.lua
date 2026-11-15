@@ -115,8 +115,35 @@ function Widget:UnregisterEvent(e) self.events[e] = nil end
 function Widget:IsEventRegistered(e) return self.events[e] == true end
 function Widget:SetText(t) self.text = t end
 function Widget:GetText() return self.text end
-function Widget:Show() self.shown = true end
-function Widget:Hide() self.shown = false end
+function Widget:Show()
+    if self.shown then return end
+    self.shown = true
+    if self.scripts.OnShow then self.scripts.OnShow(self) end
+end
+function Widget:Hide()
+    if not self.shown then return end
+    self.shown = false
+    if self.scripts.OnHide then self.scripts.OnHide(self) end
+end
+function Widget:SetShown(v) if v then self:Show() else self:Hide() end end
+function Widget:SetSize(w, h) self.width, self.height = w, h end
+function Widget:SetWidth(w) self.width = w end
+function Widget:SetHeight(h) self.height = h end
+function Widget:GetWidth() return self.width end
+function Widget:GetHeight() return self.height end
+function Widget:SetPoint(...) self.point = { ... } end
+function Widget:ClearAllPoints() self.point = nil end
+function Widget:GetPoint() if self.point then
+    local p = self.point
+    if type(p[2]) == "table" then return p[1], p[2], p[3], p[4], p[5] end
+    return p[1], nil, p[1], p[2], p[3]
+end end
+function Widget:GetCenter() return 700, 500 end
+function Widget:GetEffectiveScale() return 1 end
+function Widget:SetChecked(v) self.checked = v == true end
+function Widget:GetChecked() return self.checked == true end
+function Widget:SetEnabled(v) self.enabled = v ~= false end
+function Widget:IsEnabled() return self.enabled ~= false end
 function Widget:IsShown() return self.shown == true end
 function Widget:CreateFontString() return M.widget("FontString") end
 function Widget:CreateTexture() return M.widget("Texture") end
@@ -136,6 +163,11 @@ function CreateFrame(kind, name, parent, template)
 end
 
 UIParent = M.widget("Frame", "UIParent")
+Minimap = M.widget("Frame", "Minimap")
+Minimap:SetSize(140, 140)
+UISpecialFrames = {}
+M.cursorX, M.cursorY = 700, 600
+function GetCursorPosition() return M.cursorX, M.cursorY end
 
 function M.fire(event, ...)
     for _, f in ipairs(M.frames) do

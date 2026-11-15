@@ -19,7 +19,8 @@ MOCK = os.path.join(ROOT, "tests", "mock_wow.lua")
 DECLARED_GLOBALS = {
     "AICompanionDB", "AICompanionRules", "AICompanionShopping", "AICompanionAdvice",
     "SLASH_AICOMPANION1", "SLASH_AICOMPANION2", "AICompanionCopyFrame", "AICompanionCopyScroll",
-    "AICompanionAuctionButton",
+    "AICompanionAuctionButton", "AICompanionPlans", "AICompanionPanel", "AICompanionPanelScroll",
+    "AICompanionMinimapButton",
 }
 
 
@@ -70,9 +71,11 @@ class Game:
             self.lua.execute("local M = Mock\n" + self.lua_prelude)
         allowed = self.lua.table_from({k: True for k in DECLARED_GLOBALS})
         self.M.trackGlobals(allowed)
+        self.ns = {}
         for addon in ("AICompanion_Data", "AICompanion"):
             files, saved_names = toc_files(addon)
             ns = self.lua.table()
+            self.ns[addon] = ns
             for fname in files:
                 path = os.path.join(ADDONS, addon, fname)
                 with open(path, encoding="utf-8") as f:
