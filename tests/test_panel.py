@@ -88,14 +88,23 @@ class Content(PanelTest):
         })
         self.assertEqual([l["number"] for l in self.step_lines(g)], list(range(1, 11)))  # doing order kept
 
-    def test_source_labels(self):
+    def test_cautions_in_plain_words(self):
+        """Issue #12 section 1: no tags; one plain line only for original-game and unverified steps."""
         g = self.game(data_source=data_file())
         st = self.steps(g)
-        self.assertEqual((st["t-boar"]["tag"], st["t-boar"]["source"]), ("Forever", "Source: Forever site: page"))
-        self.assertEqual((st["t-lw60"]["tag"], st["t-lw60"]["source"]), ("Original", "Original-game source: Old wiki: page"))
-        self.assertEqual(st["t-eat"]["tag"], "Judgment")
-        self.assertEqual(st["t-odd"]["tag"], "Unverified")
-        self.assertEqual(st["t-first"]["tag"], "Game")
+        self.assertEqual(st["t-lw60"]["caution"], "From the original game. Not confirmed for Forever.")
+        self.assertEqual(st["t-odd"]["caution"], "Not verified yet.")
+        for key in ("t-boar", "t-first", "t-eat"):          # Forever source, game data, judgment: nothing to say
+            self.assertNotIn("caution", st[key])
+        self.assertEqual(st["t-boar"]["source"], "Source: Forever site: page")
+        self.assertEqual(st["t-lw60"]["source"], "Source: Old wiki: page")
+
+    def test_an_original_game_source_gets_the_caution_whatever_the_tag(self):
+        plan = json.loads(json.dumps(PLAN))
+        plan["characters"]["Testchar"]["next"].append(
+            {"id": "t-mixed", "title": "Train Journeyman", "tag": "lookup", "source": "old"})
+        g = self.game(data_source=data_file(plan))
+        self.assertEqual(self.steps(g)["t-mixed"]["caution"], "From the original game. Not confirmed for Forever.")
 
     def test_steps_update_as_you_play(self):
         g = self.game(data_source=data_file())
@@ -125,7 +134,7 @@ class Content(PanelTest):
         prof = m["sections"]["professions"]
         self.assertEqual(prof[0]["title"], "Leatherworking 50/75")
         self.assertEqual(prof[1]["title"], "Next: Train Journeyman in Testtown.")
-        self.assertEqual(prof[1]["source"], "Original-game source: Old wiki: page")
+        self.assertEqual((prof[1]["source"], prof[1]["caution"]), ("Source: Old wiki: page", "From the original game. Not confirmed for Forever."))
         self.assertFalse(m["sections"]["gear"][0]["done"])
         self.assertEqual(m["sections"]["talents"][0]["title"], "5 points in Marksmanship.")
         self.assertEqual(m["bagsNote"], "Two free slots in the pouch.")
@@ -167,7 +176,7 @@ class Window(PanelTest):
         f = self.open(g)
         self.assertTrue(f.shown)
         rows = to_py(f.lastRows)
-        self.assertEqual((rows[0]["text"], rows[0]["tag"]), ("1. Equip the Hunting Bow", "Game"))
+        self.assertEqual(rows[0]["text"], "1. Equip the Hunting Bow")
         self.assertNotIn("sub", rows[0])                     # one line per step until clicked
         self.assertTrue(rows[2]["done"])
         self.assertEqual(f.headline.text, "Level 20 hunter.")   # first sentence of the full headline
@@ -378,12 +387,26 @@ class Readability(PanelTest):
         g.lua.execute(click_first)
         self.assertNotIn("sub", to_py(f.lastRows)[0])
 
-    def test_short_tags_with_colours(self):
+    def test_no_tags_in_any_list(self):
         g = self.game(data_source=data_file())
         f = self.open(g)
-        tags = {r["key"]: (r.get("tag"), r.get("tagColor")) for r in to_py(f.lastRows) if r.get("check")}
-        self.assertEqual(tags["t-bow"], ("Game", "66dd66"))
-        self.assertEqual(tags["t-lw60"], ("Original", "ffaa44"))
+        for key in ("next", "questing", "professions", "gear", "talents", "items"):
+            self.panel(g).select(key)
+            self.assertEqual([r for r in to_py(f.lastRows) if "tag" in r or "tagColor" in r], [], key)
+        texts = [t for t in to_py(g.lua.eval('''(function() local o = {}
+            for _, r in ipairs(Mock.regions) do if r.kind == "FontString" and rawget(r, "text") then o[#o + 1] = r.text end end
+            return o end)()''')) or []]
+        self.assertEqual([t for t in texts if "|cff" in t], [])     # no coloured words anywhere in the panel
+
+    def test_expanded_step_shows_the_caution_then_the_source(self):
+        g = self.game(data_source=data_file())
+        f = self.open(g)
+        self.panel(g).expand("t-lw60")
+        row = next(r for r in to_py(f.lastRows) if r["key"] == "t-lw60")
+        self.assertEqual(row["sub"], "From the original game. Not confirmed for Forever.\nSource: Old wiki: page")
+        self.panel(g).expand("t-boar")
+        row = next(r for r in to_py(f.lastRows) if r["key"] == "t-boar")
+        self.assertEqual(row["sub"], "Source: Forever site: page")
 
     def test_short_headline_wins(self):
         plan = json.loads(json.dumps(PLAN))

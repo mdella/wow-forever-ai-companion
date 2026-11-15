@@ -25,14 +25,11 @@ Panel.SECTIONS = {
     { key = "items", label = "Items" },
 }
 
--- Where a recommendation comes from: a short coloured tag. The source's name shows only
--- when the step is expanded.
-Panel.TAGS = {
-    game = { "Game", "66dd66" },
-    lookup = { "Forever", "66bbff" },
-    classic = { "Original", "ffaa44" },
-    judgment = { "Judgment", "cc99ff" },
-    unverified = { "Unverified", "ff6666" },
+-- Where a recommendation comes from. The list shows no tags; an expanded step says it in
+-- plain words, and only when the player should be careful.
+Panel.CAUTION = {
+    classic = "From the original game. Not confirmed for Forever.",
+    unverified = "Not verified yet.",
 }
 
 -- The headline shown in the panel: the plan's short headline, or the first sentence of the full one.
@@ -137,12 +134,12 @@ end
 
 -- One step as a panel line: its tick state and where it comes from.
 local function stepLine(step, f, ticks, sources)
-    local tag = Panel.TAGS[step.tag]
     local line = { kind = "step", id = step.id, title = step.title or "", detail = step.detail,
-                   tag = tag and tag[1], tagColor = tag and tag[2] }
+                   caution = Panel.CAUTION[step.tag] }
     local src = step.source and type(sources) == "table" and sources[step.source] or nil
     if type(src) == "table" and src.label then
-        line.source = (src.scope == "classic" and "Original-game source: " or "Source: ") .. src.label
+        line.source = "Source: " .. src.label
+        if src.scope == "classic" and not line.caution then line.caution = Panel.CAUTION.classic end
     end
     local auto = nil
     if step.done ~= nil then auto = Panel.check(step.done, f) end   -- true, false, or nil for a rule it cannot judge
@@ -328,7 +325,7 @@ end
 
 -- A section of the model as display rows. Steps show one line (tick box, title, tag);
 -- the expanded step also shows its detail and source.
--- Row: { key, text, tag, tagColor, sub, check = {id, done, auto}, heading, expandable }
+-- Row: { key, text, sub, check = {id, done, auto}, heading, expandable }
 function Panel.rows(m, key, open)
     local rows = {}
     local function add(r) rows[#rows + 1] = r end
@@ -363,9 +360,10 @@ function Panel.rows(m, key, open)
         else
             local more = {}
             if l.detail and l.detail ~= "" then more[#more + 1] = l.detail end
+            if l.caution then more[#more + 1] = l.caution end
             if l.source then more[#more + 1] = l.source end
             local title = (l.number and (l.number .. ". ") or "") .. l.title
-            add({ key = rkey, text = title, tag = l.tag, tagColor = l.tagColor,
+            add({ key = rkey, text = title,
                   sub = (open == rkey and #more > 0) and table.concat(more, "\n") or nil,
                   expandable = #more > 0,
                   check = l.kind == "step" and { id = l.id, done = l.done, auto = l.auto } or nil,
@@ -390,8 +388,6 @@ local function rowFrame(i)
     r.title = r:CreateFontString(nil, "OVERLAY", FONT_TITLE)
     r.title:SetJustifyH("LEFT")
     r.title:SetWordWrap(false)
-    r.tag = r:CreateFontString(nil, "OVERLAY", FONT_TEXT)
-    r.tag:SetJustifyH("RIGHT")
     r.sub = r:CreateFontString(nil, "OVERLAY", FONT_TEXT)
     r.sub:SetJustifyH("LEFT")
     r.sub:SetWordWrap(true)
@@ -452,14 +448,11 @@ render = function()
         f.title:SetFontObject(r.heading and FONT_HEADING or FONT_TITLE)
         f.title:ClearAllPoints()
         f.title:SetPoint("TOPLEFT", f, "TOPLEFT", x, -3)
-        f.title:SetWidth(width - x - 96)
+        f.title:SetWidth(width - x - 12)
         f.title:SetText(r.text or "")
         if r.heading then f.title:SetTextColor(1, 0.82, 0)
         elseif r.done then f.title:SetTextColor(0.55, 0.85, 0.55)
         else f.title:SetTextColor(1, 1, 1) end
-        f.tag:ClearAllPoints()
-        f.tag:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -5)
-        f.tag:SetText(r.tag and ("|cff" .. (r.tagColor or "ffffff") .. r.tag .. "|r") or "")
         local h = math.max(textHeight(f.title, r.heading and 22 or 18), 24) + 4
         if r.sub then
             f.sub:ClearAllPoints()
