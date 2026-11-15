@@ -57,6 +57,13 @@ Attach `CODEX_GUIDE.md`, then say:
 8. **Write to the player as "you".** The player is playing the character. Every piece of text written for the player (headline, short headline, steps, notes, item tips, professions, gear, talents, bags, blind spots) addresses the player as "you" and "your": "Your bags are full", never "Her bags are full" or "He is in Darnassus". Never refer to the played character in the third person. Use the third person only for someone else: an NPC, a monster, or another of the player's own characters named in the text ("Mail to <name> for her Alchemy"). For another character's pronouns, `character.sex` in that character's snapshot is 2 for male, 3 for female.
 9. **Every place comes with coordinates.** Every vendor, trainer, quest giver, hand-in, cave, camp, dungeon entrance, mailbox, bank and auction house named in advice comes with its zone and map coordinates, in tips, notes and step details alike: "Recipe: <vendor>, <zone> 37.0, 56.3" fits a 48-character tip. If no coordinates can be found, say so in the note and describe the spot in words; never leave a bare name. Label a coordinate's source like any other fact: a Forever source, the original game, or the player's own position from the snapshot (`location.x`, `location.y`).
    - **Stormwind City:** Forever redrew the Stormwind map to include the harbour, so coordinates from original-game guides are wrong there. Use only Forever sources for Stormwind. Before trusting original-game coordinates for any other city, check a Forever source for the same change.
+10. **Order steps from where the player is standing.**
+   - Start from `snapshot.location` (zone and coordinates) and the hearthstone location.
+   - Whatever can be done within a short walk of the player comes first, before any step that means leaving the area.
+   - A quest one to three levels above the character is not postponed when part of it is doable now. Split it: say which objectives to do now (pickups, the lower-level enemies) and which to leave, with the enemy levels.
+   - Never send the player out of an area that still has objectives they can do, unless bags or durability force it. If they do, say so.
+   - Group hand-ins by place, so one visit to a town or camp finishes everything due there.
+   - Re-order on every refresh: the player has moved.
 
 ## 2. Files
 
@@ -182,7 +189,7 @@ python3 -I build.py "<SavedVariables file>" "<private folder>/plans.json" templa
 
 It needs Python with `lupa`. Deliver the page however the player prefers (a published page or a file). Rebuild after each new snapshot.
 
-`plans.json` schema: see `plans.example.json`. Fields per character: `headline`, `headlineShort` (optional, at most 100 characters, written to the player as "you"; the in-game panel shows it, or else the first sentence of `headline`), `next` (steps, **in the order to do them**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order.
+`plans.json` schema: see `plans.example.json`. Fields per character: `headline`, `headlineShort` (optional, at most 100 characters, written to the player as "you"; the in-game panel shows it, or else the first sentence of `headline`), `next` (steps, **in the order to do them, nearest first (section 1, rule 10)**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order.
 
 Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (a key in `sources`) and `done`.
 
@@ -206,6 +213,7 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 ## Changelog
 
+- Guide — Rule 10: order steps from where the player is standing, nearest first; split a quest one to three levels above the character into what to do now and what to leave; group hand-ins by place; re-order on every refresh. No add-on change.
 - 0.11.0 — Prices from Auctionator when the player has it, in `snapshot.auctionator`. The "check prices" button appears only when Auctionator is missing or its prices are older than `/aic ah age` (default 5 days), and `/aic ah` then checks only the rest. The add-on's own tooltip price line is left out for items Auctionator prices. Needs a full game restart once (`.toc` change).
 - 0.10.4 — Installing is one folder, `AICompanion`. `gen_data.py` creates `AICompanion_Data` and its `.toc` when missing, so an install or update can never replace the player's data. The data add-on's game version follows the installed add-on release. Snapshots record `client.dataAddon`.
 - 0.10.3 — Includes 0.9.2: using items from the bags is no longer blocked, and blocked actions are recorded in `blockedActions`. The panel's minimap button and window were checked against the same rule: they sit on the minimap edge and on UIParent and never touch a game window.
