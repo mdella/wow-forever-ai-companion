@@ -5,7 +5,7 @@
 
 local ADDON_NAME, ns = ...
 ns = type(ns) == "table" and ns or {}
-local VERSION = "0.10.3"
+local VERSION = "0.11.0"
 local PREFIX = "|cff66ccffAI Companion|r: "
 
 local DB            -- AICompanionDB once loaded
@@ -657,12 +657,17 @@ local function scanClient()
         projectID = WOW_PROJECT_ID, camelotProjectID = WOW_PROJECT_CAMELOT,
         locale = try(GetLocale),
         addonVersion = VERSION,
+        -- false when the AICompanion_Data add-on is missing or not ticked; the companion creates it
+        dataAddon = type(AICompanionAdvice) == "table" or type(AICompanionPlans) == "table"
+            or type(AICompanionShopping) == "table",
     }
 end
 
 -------------------------------------------------------------------------------
 -- Snapshot assembly
 -------------------------------------------------------------------------------
+
+local scanAuctionator -- defined with the auction code below
 
 local SECTIONS = {
     { "client", scanClient },
@@ -681,6 +686,7 @@ local SECTIONS = {
     { "skillsModern", scanSkillsModern },
     { "reputation", scanReputation },
     { "auras", scanAuras },
+    { "auctionator", function() return scanAuctionator() end },
 }
 
 local function charStore()
@@ -1088,6 +1094,69 @@ local function ahBuildQueue()
     return list
 end
 
+-------------------------------------------------------------------------------
+-- Auctionator (optional). Its public functions for other add-ons (Auctionator.API.v1) give the
+-- price it last saw for an item and how many days ago, so no search is needed while its data is
+-- fresh. Its saved files are never read: their format is internal to Auctionator.
+-------------------------------------------------------------------------------
+
+local CALLER = "AICompanion"
+local AUCTIONATOR_MAX_AGE_DAYS = 5 -- default; the player sets it with /aic ah age <days>
+
+local function atorAPI()
+    local A = Auctionator
+    local v1 = type(A) == "table" and type(A.API) == "table" and A.API.v1
+    if type(v1) == "table" and type(v1.GetAuctionPriceByItemID) == "function"
+       and type(v1.GetAuctionAgeByItemID) == "function" then return v1 end
+    return nil
+end
+
+local function atorMaxAge()
+    local n = DB and tonumber(DB.auctionatorMaxAgeDays)
+    if n and n >= 0 then return n end
+    return AUCTIONATOR_MAX_AGE_DAYS
+end
+
+-- Auctionator's price (copper) and age (days; nil if older than 21 days) for an item, or nil.
+local function atorPrice(itemID)
+    local v1 = atorAPI()
+    if not v1 or type(itemID) ~= "number" then return nil end
+    local okP, price = pcall(v1.GetAuctionPriceByItemID, CALLER, itemID)
+    if not okP or type(price) ~= "number" or isSecret(price) then return nil end
+    local okA, age = pcall(v1.GetAuctionAgeByItemID, CALLER, itemID)
+    if not okA or type(age) ~= "number" or isSecret(age) then age = nil end
+    return price, age
+end
+
+local function atorFresh(age) return type(age) == "number" and age <= atorMaxAge() end
+
+-- Auctionator's prices for what the character carries, banks and shops for. Freshness of the
+-- whole set: at least one item seen within the age setting.
+scanAuctionator = function()
+    local out = { loaded = atorAPI() ~= nil, maxAgeDays = atorMaxAge() }
+    if not out.loaded then return out end
+    local items, priced, fresh, newest = {}, 0, 0, nil
+    for _, e in ipairs(ahBuildQueue()) do
+        local price, age = atorPrice(e.itemID)
+        if price then
+            priced = priced + 1
+            if atorFresh(age) then fresh = fresh + 1 end
+            if age and (not newest or age < newest) then newest = age end
+            items[e.name] = { itemID = e.itemID, price = price, priceText = money(price), ageDays = age,
+                              fresh = atorFresh(age), kind = e.kind, count = e.count }
+        end
+    end
+    out.items, out.priced, out.fresh, out.newestAgeDays = items, priced, fresh, newest
+    out.dataFresh = fresh > 0
+    return out
+end
+
+-- The manual check is needed when Auctionator is missing or none of its prices is fresh.
+local function ahNeedsCheck()
+    local ok, a = pcall(scanAuctionator)
+    return not (ok and type(a) == "table" and a.loaded and a.dataFresh)
+end
+
 local ahNext
 
 local function ahRecord(entry, result)
@@ -1226,6 +1295,19 @@ local function ahStart()
     if ah.running then say("an auction check is already running.") return end
     local queue = ahBuildQueue()
     if #queue == 0 then say("nothing to price-check.") return end
+    if atorAPI() then
+        -- Auctionator already knows these; search only what it lacks or saw too long ago.
+        local need = {}
+        for _, e in ipairs(queue) do
+            local price, age = atorPrice(e.itemID)
+            if not (price and atorFresh(age)) then need[#need + 1] = e end
+        end
+        if #need == 0 then
+            say(("Auctionator has prices seen within %d days for all %d items; nothing to check."):format(atorMaxAge(), #queue))
+            return
+        end
+        queue = need
+    end
     local store = ahStore()
     store.results = {}
     ah.queue, ah.running, ah.current, ah.done, ah.total = queue, true, nil, 0, #queue
@@ -1257,10 +1339,14 @@ local function ahShow()
             b:SetScript("OnClick", function() local okStart, e = pcall(ahStart) if not okStart then say("auction check failed: " .. tostring(e)) end end)
             ahButton = b
         end
-        placeAhButton()
+        if ahNeedsCheck() then placeAhButton() else ahButton:Hide() end
     end)
     if not ok and DB then DB.lastEventError = "auction button: " .. tostring(err) end
-    say("auction house open. Click 'AI Companion: check prices' below the right corner of the window, or type /aic ah.")
+    if ahButton and ahButton:IsShown() then
+        say("auction house open. Click 'AI Companion: check prices' below the right corner of the window, or type /aic ah.")
+    else
+        say(("auction house open. Prices come from Auctionator (seen within %d days). /aic ah checks the rest."):format(atorMaxAge()))
+    end
 end
 
 local function ahClosed()
@@ -1351,6 +1437,7 @@ local function onItemTooltip(tooltip, data)
     local name = C_Item and try(C_Item.GetItemNameByID, id)
     if type(name) ~= "string" or isSecret(name) then name = nil end
     local r = priceIndex.byID[id] or (name and priceIndex.byName[name]) or nil
+    if r and atorPrice(id) then r = nil end -- Auctionator shows its own price line
     local action, note, asOf = adviceFor(name)
     local fromRule = false
     if not action then
@@ -1682,7 +1769,15 @@ local function handleSlash(msg)
         takeSnapshot("ask")
         say("question noted. Type /aic save to send it with a fresh snapshot.")
     elseif cmd == "ah" or cmd == "auction" then
-        ahStart()
+        local days = rest:lower():match("^age%s+(%d+)$")
+        if days then
+            DB.auctionatorMaxAgeDays = tonumber(days)
+            say(("Auctionator prices count as fresh for %d days."):format(DB.auctionatorMaxAgeDays))
+        elseif rest:lower() == "age" then
+            say(("Auctionator prices count as fresh for %d days. Change with /aic ah age <days>."):format(atorMaxAge()))
+        else
+            ahStart()
+        end
     elseif cmd == "sort" then
         if rest:lower() == "debug" then sortDebugReport() else sortStart() end
     elseif cmd == "panel" then
@@ -1698,6 +1793,7 @@ local function handleSlash(msg)
         print("  /aic copy       show a text summary you can copy and paste")
         print("  /aic ask <q>    note a question for your companion")
         print("  /aic ah         at an auctioneer: check prices for your bags, bank and shopping list")
+        print("  /aic ah age <n> with Auctionator: use its prices seen within n days (default 5)")
         print("  /aic sort       group your bags by advice: sell, auction, mail, bank, use, craft, quest, keep")
         print("  /aic panel      open or close your companion panel (also the minimap button)")
         print("  /aic sort debug what the bag sort found, and why it last stopped")

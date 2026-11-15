@@ -12,6 +12,11 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import ROOT, Game, to_py  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import set_interface  # noqa: E402
+
+INTERFACE = set_interface.read_source()          # the supported Forever interface, e.g. "16001"
+NEXT_INTERFACE = str(int(INTERFACE) + 1)          # a later release, for the follow-the-release tests
 import world as W  # noqa: E402
 
 
@@ -75,7 +80,7 @@ class Login(GameTest):
         self.assertEqual(s["completedQuests"]["count"], 3)
         self.assertEqual(s["completedQuests"]["untitled"], 1)
         self.assertEqual({p["name"] for p in s["skills"]["professions"]}, {"Leatherworking", "Skinning"})
-        self.assertEqual(s["client"]["interface"], 16001)
+        self.assertEqual(s["client"]["interface"], int(INTERFACE))
 
     def test_item_records_carry_tooltip_and_price(self):
         g = self.game()
@@ -742,6 +747,214 @@ class BagSortRealTiming(GameTest):
         g.advance(30)
         line = next(l for l in g.chat() if "your bags changed" in l)
         self.assertIn("(bag 0 slot 16: expected empty, found Broken Fang)", line)
+
+class WithoutDataFolder(GameTest):
+    """Installing is one folder: AICompanion_Data appears only once the companion writes advice."""
+
+    def test_runs_without_the_data_addon(self):
+        g = self.game(with_data=False)
+        self.assertTrue(any("ready" in line for line in g.chat()))
+        self.assertIs(g.char()["snapshot"]["client"]["dataAddon"], False)
+        lines = g.hover(W.LEATHER)                       # built-in rule advice still shows
+        self.assertEqual(lines[1][1], "rule")
+        m = to_py(g.ns["AICompanion"].panel.currentModel()[0])
+        self.assertFalse(m["hasPlan"])
+        self.assertIn("No plan for Testchar yet", m["headline"])
+        g.slash("/aic save")                             # save and reload work too
+        self.assertIs(g.char()["snapshot"]["client"]["dataAddon"], False)
+
+    def test_snapshot_says_the_data_addon_is_loaded(self):
+        g = self.game()
+        self.assertIs(g.char()["snapshot"]["client"]["dataAddon"], True)
+
+
+class GenDataCreatesFolder(unittest.TestCase):
+    """gen_data.py creates the data add-on; its interface follows the installed AICompanion release."""
+
+    def addons(self, installed_interface=None):
+        """A temporary AddOns folder, with AICompanion's .toc if an interface is given."""
+        addons = tempfile.mkdtemp()
+        if installed_interface:
+            os.makedirs(os.path.join(addons, "AICompanion"))
+            with open(os.path.join(addons, "AICompanion", "AICompanion.toc"), "w", encoding="utf-8") as f:
+                f.write("## Interface: %s\n## Title: AI Companion\n" % installed_interface)
+        return addons
+
+    def run_gen(self, addons):
+        target = os.path.join(addons, "AICompanion_Data", "AICompanion_Data.lua")
+        return subprocess.run([sys.executable, os.path.join(ROOT, "companion/gen_data.py"),
+                               os.path.join(ROOT, "companion/plans.example.json"), target],
+                              check=True, capture_output=True, text=True).stdout
+
+    def data_toc(self, addons):
+        with open(os.path.join(addons, "AICompanion_Data", "AICompanion_Data.toc"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_creates_missing_folder_and_toc(self):
+        addons = self.addons(INTERFACE)
+        out = self.run_gen(addons)
+        self.assertIn("restart the game", out)
+        with open(os.path.join(ROOT, "AddOns/AICompanion_Data/AICompanion_Data.toc"), encoding="utf-8") as f:
+            self.assertEqual(self.data_toc(addons), f.read())   # same as the repository's template
+        self.assertTrue(os.path.exists(os.path.join(addons, "AICompanion_Data", "AICompanion_Data.lua")))
+        self.assertNotIn("restart the game", self.run_gen(addons))  # second run: /reload is enough
+
+    def test_interface_follows_the_installed_release_not_the_repository(self):
+        addons = self.addons(NEXT_INTERFACE)               # an installed release the repo isn't at
+        self.run_gen(addons)
+        self.assertIn("## Interface: %s\n" % NEXT_INTERFACE, self.data_toc(addons))
+
+    def test_new_release_updates_only_the_interface_line(self):
+        addons = self.addons(INTERFACE)
+        self.run_gen(addons)
+        toc = os.path.join(addons, "AICompanion_Data", "AICompanion_Data.toc")
+        with open(toc, "a", encoding="utf-8") as f:
+            f.write("## X-Player-Note: keep me\n")
+        with open(os.path.join(addons, "AICompanion", "AICompanion.toc"), "w", encoding="utf-8") as f:
+            f.write("## Interface: %s\n" % NEXT_INTERFACE)  # the owner released a newer version
+        out = self.run_gen(addons)
+        self.assertIn("interface " + NEXT_INTERFACE, out)
+        self.assertIn("restart the game", out)
+        text = self.data_toc(addons)
+        self.assertTrue(text.startswith("## Interface: %s\n" % NEXT_INTERFACE))
+        self.assertNotIn(INTERFACE, text)
+        self.assertIn("## X-Player-Note: keep me", text)
+
+    def test_matching_interface_leaves_the_toc_alone(self):
+        addons = self.addons(INTERFACE)
+        self.run_gen(addons)
+        toc = os.path.join(addons, "AICompanion_Data", "AICompanion_Data.toc")
+        before = os.path.getmtime(toc)
+        os.utime(toc, (before - 100, before - 100))
+        self.assertNotIn("restart the game", self.run_gen(addons))
+        self.assertEqual(os.path.getmtime(toc), before - 100)
+
+    def test_without_an_installed_addon_uses_this_release(self):
+        addons = self.addons()                             # AICompanion not next to the data folder
+        self.run_gen(addons)
+        with open(os.path.join(ROOT, "AddOns/AICompanion_Data/AICompanion_Data.toc"), encoding="utf-8") as f:
+            self.assertEqual(self.data_toc(addons), f.read())
+
+    def test_every_file_states_the_supported_interface(self):
+        """FOREVER_INTERFACE is the one place it is set; tools/set_interface.py copies it everywhere."""
+        self.assertEqual(set_interface.mismatches(INTERFACE), [],
+                         "run: python3 tools/set_interface.py")
+
+
+class WithAuctionator(GameTest):
+    """Auctionator's public functions replace the manual check while its prices are fresh."""
+
+    def ator_game(self, prices=None, default=None, api=True, raises=False):
+        """Start with a stand-in Auctionator. prices: itemID -> (copper, age in days or None)."""
+        g = Game(W.world())
+        rows = "".join("[%d] = { %d, %s }, " % (i, p, "nil" if a is None else a) for i, (p, a) in (prices or {}).items())
+        g.lua_prelude = """
+ATOR_PRICES = { %s }
+ATOR_DEFAULT = %s
+ATOR_CALLERS = {}
+local RAISES = %s
+local function lookup(caller, id, n)
+    ATOR_CALLERS[caller] = true
+    if RAISES then error("Auctionator broke") end
+    local e = ATOR_PRICES[id] or ATOR_DEFAULT
+    return e and e[n]
+end
+Auctionator = %s
+""" % (rows, "nil" if default is None else "{ %d, %d }" % default, "true" if raises else "false",
+       "{ API = { v1 = { GetAuctionPriceByItemID = function(c, id) return lookup(c, id, 1) end, "
+       "GetAuctionAgeByItemID = function(c, id) return lookup(c, id, 2) end } } }" if api else "{}")
+        self.games.append(g)
+        return g.start()
+
+    def button(self, g):
+        return g.lua.globals().AICompanionAuctionButton
+
+    def test_fresh_prices_hide_the_button_and_reach_the_snapshot(self):
+        g = self.ator_game({W.LEATHER: (55, 1)})
+        a = g.char()["snapshot"]["auctionator"]
+        self.assertTrue(a["loaded"])
+        self.assertTrue(a["dataFresh"])
+        self.assertEqual(a["maxAgeDays"], 5)
+        leather = a["items"]["Light Leather"]
+        self.assertEqual((leather["price"], leather["ageDays"], leather["fresh"], leather["itemID"]),
+                         (55, 1, True, W.LEATHER))
+        self.assertNotIn("Linen Cloth", a["items"])          # Auctionator has no price for it
+        self.assertTrue(g.lua.eval('ATOR_CALLERS["AICompanion"] == true'))
+        g.M.openAuction()
+        self.assertFalse(self.button(g).shown)
+        self.assertTrue(any("Prices come from Auctionator" in l for l in g.chat()))
+        self.assertEqual(g.auction_queries(), [])
+
+    def test_stale_prices_show_the_button(self):
+        g = self.ator_game({W.LEATHER: (55, 9)})
+        self.assertFalse(g.char()["snapshot"]["auctionator"]["dataFresh"])
+        g.M.openAuction()
+        self.assertTrue(self.button(g).shown)
+
+    def test_price_older_than_21_days_has_no_age(self):
+        g = self.ator_game({W.LEATHER: (55, None)})          # Auctionator returns no age past 21 days
+        leather = g.char()["snapshot"]["auctionator"]["items"]["Light Leather"]
+        self.assertEqual((leather["price"], leather["fresh"]), (55, False))
+        self.assertNotIn("ageDays", leather)
+
+    def test_age_setting_changes_what_counts_as_fresh(self):
+        g = self.ator_game({W.LEATHER: (55, 9)})
+        g.slash("/aic ah age 10")
+        self.assertEqual(g.db()["auctionatorMaxAgeDays"], 10)
+        g.M.openAuction()
+        self.assertFalse(self.button(g).shown)
+        g.M.closeAuction()
+        g.slash("/aic ah age 3")
+        g.M.openAuction()
+        self.assertTrue(self.button(g).shown)
+
+    def test_manual_check_skips_items_with_fresh_prices(self):
+        g = self.ator_game({W.LEATHER: (55, 1), W.LINEN: (20, 8)})
+        g.M.openAuction()
+        g.slash("/aic ah")
+        g.advance(60)
+        queried = [q["search"] for q in g.auction_queries()]
+        self.assertNotIn("Light Leather", queried)           # fresh in Auctionator
+        self.assertIn("Linen Cloth", queried)                # too old in Auctionator
+        self.assertEqual(len(queried), 7)
+
+    def test_nothing_to_check_when_every_price_is_fresh(self):
+        g = self.ator_game(default=(10, 0))
+        g.M.openAuction()
+        g.slash("/aic ah")
+        g.advance(30)
+        self.assertEqual(g.auction_queries(), [])
+        self.assertTrue(any("nothing to check" in l for l in g.chat()))
+
+    def test_auctionator_without_its_functions_counts_as_missing(self):
+        g = self.ator_game(api=False)
+        self.assertEqual(g.char()["snapshot"]["auctionator"], {"loaded": False, "maxAgeDays": 5})
+        g.M.openAuction()
+        self.assertTrue(self.button(g).shown)
+
+    def test_auctionator_errors_fall_back_to_the_manual_check(self):
+        g = self.ator_game(raises=True)
+        self.assertFalse(g.char()["snapshot"]["auctionator"]["dataFresh"])
+        g.M.openAuction()
+        self.assertTrue(self.button(g).shown)
+        g.slash("/aic ah")
+        g.advance(60)
+        self.assertEqual(len(g.auction_queries()), 8)
+
+    def test_without_auctionator_the_snapshot_says_so(self):
+        g = self.game()
+        self.assertEqual(g.char()["snapshot"]["auctionator"], {"loaded": False, "maxAgeDays": 5})
+
+    def test_tooltip_leaves_the_price_line_to_auctionator(self):
+        g = self.ator_game({W.LEATHER: (55, 9)})             # stale, so the manual check runs
+        g.M.openAuction()
+        g.slash("/aic ah")
+        g.advance(60)
+        leather = [l or "" for l, _ in g.hover(W.LEATHER)]
+        self.assertFalse(any("listed" in l for l in leather), leather)
+        helm = [l or "" for l, _ in g.hover(W.PLATE_HELM)]    # Auctionator has no price: our line stays
+        self.assertTrue(any("listed" in l for l in helm), helm)
+
 
 if __name__ == "__main__":
     unittest.main()

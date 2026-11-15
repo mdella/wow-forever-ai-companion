@@ -24,11 +24,13 @@ Nothing is sent anywhere by the add-on. The game does not let add-ons use the ne
 1. Close the game.
 2. Download this repository (Code, then Download ZIP) and unzip it.
 3. Find the `_forever_` folder inside your game folder. On Windows it is usually `C:\Program Files (x86)\World of Warcraft\_forever_`.
-4. Copy the two folders inside `AddOns` (`AICompanion` and `AICompanion_Data`) into `_forever_\Interface\AddOns`.
-5. Start the game. On the character screen, open AddOns and check that "AI Companion" and "AI Companion Data" are both ticked.
+4. Copy the `AICompanion` folder from inside `AddOns` into `_forever_\Interface\AddOns`. That's the only folder you install.
+5. Start the game. On the character screen, open AddOns and check that "AI Companion" is ticked.
 6. Log in and type `/aic save`. The screen reloads for a second. That writes your first snapshot.
 
-When you update later, replace only the `AICompanion` folder. `AICompanion_Data` holds your own advice and shopping lists.
+If you use Claude, it creates a second folder, `AICompanion_Data`, the first time it writes advice for you. That folder holds your own advice, shopping lists and plan. Restart the game once when Claude asks, and tick "AI Companion Data" too.
+
+When you update later, replace only the `AICompanion` folder. Never replace or delete `AICompanion_Data`.
 
 ## Use it with Claude
 
@@ -47,7 +49,8 @@ Claude reads your snapshot, researches Forever sources, and writes its advice in
 |---|---|
 | `/aic save` | Take a snapshot and reload so it is written to disk. Do this before asking for advice. |
 | `/aic ask <question>` | Leave a question for your companion with the next snapshot. |
-| `/aic ah` | At an auctioneer: check prices for your bags, bank and shopping list. |
+| `/aic ah` | At an auctioneer: check prices for your bags, bank and shopping list. If you use Auctionator, its prices are used instead and this checks only what Auctionator hasn't seen lately. |
+| `/aic ah age <days>` | With Auctionator: how many days its prices count as fresh (default 5). Older than that, the "check prices" button comes back. |
 | `/aic sort` | Group your bags by what to do with each item: sell, auction, mail, bank, use, craft, quest, keep. Also a "Sort by advice" button above your bags. |
 | `/aic panel` | Open your companion panel: this character's plan, inside the game. Also the book button on the minimap (drag it to move it). |
 | `/aic copy` | Show a text summary you can copy and paste. |
@@ -72,15 +75,17 @@ Auction 7c (2653 listed, 34m ago)          vendor 1c
 - WoW: Forever is new. Much of what is written online is about older versions of the game. The guide tells Claude to say so whenever its source is not about Forever. When the game and the advice disagree, the game is right.
 - The built-in rules know item categories, not recipes. They will not tell you what to craft.
 - The add-on writes its file only on `/reload` or logout. Advice is only as fresh as your last save.
+- If you use **Auctionator**, AI Companion reads its prices, so you don't need the "check prices" button. The button only appears when Auctionator's prices are older than 5 days, or Auctionator isn't installed.
 
 ## Repository layout
 
 | Path | What |
 |---|---|
 | `AddOns/AICompanion/` | The add-on: `AICompanion.lua` (snapshots, auction check, tooltips) and `AICompanion_Rules.lua` (built-in advice rules). |
-| `AddOns/AICompanion_Data/` | Your shopping lists and item advice. Ships empty. |
+| `AddOns/AICompanion_Data/` | Empty template of the data add-on, used by the tests. Not installed; your companion creates your own copy. |
 | `companion/CLAUDE_GUIDE.md` | Instructions for the assistant. |
 | `companion/` | Tools the assistant uses: `gen_data.py` (writes the data add-on from a plan file), `build.py` and `template.html` (dashboard), `plans.example.json` (plan file format). |
+| `FOREVER_INTERFACE` | The game version the add-on supports, set in this one place. `tools/set_interface.py` copies it into the other files. |
 | `tests/` | Automated checks: the add-on run inside a stand-in game client. Run on every change. |
 
 ## License
