@@ -141,6 +141,23 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 4. List what is not captured yet (bank, profession windows, other characters) and ask for those in-game actions.
 5. Research Forever sources for the character's level and zone, then write `plans.json`, generate the data file, and ask for `/reload`.
 
+## 9. Reporting a problem with the add-on
+
+When the add-on misbehaves (a Lua error, a wrong or missing snapshot section, wrong tooltip advice, an auction check that fails), file a GitHub issue on `ztarsi/wow-forever-ai-companion` from the player's GitHub account. A maintainer agent checks every hour, fixes it with a test, and opens a pull request that the player approves.
+
+1. **One problem per issue.** Search open issues first; add to an existing one instead of filing a duplicate.
+2. **Label it `from-companion`.**
+3. **Title:** what is wrong, in one line. Example: `Tooltip says "Equip now" for a bow the hunter already wears`.
+4. **Body, in this order:**
+   - `Add-on version:` from `client.addonVersion` in the snapshot.
+   - `What the player did:` the in-game steps.
+   - `Expected:` and `Seen:` one line each.
+   - `Evidence:` the smallest excerpt of the snapshot, `errors`, `lastEventError` or `lastSkipped` that shows it, as a Lua or JSON code block. Item records with their `tooltip` lines are the most useful.
+   - `Forever facts:` anything about how the real client behaves that the add-on got wrong (an interface that returns nothing, an event that never fires), and how you know.
+5. **No personal data, ever.** The repository is public. Replace character names with `Charone`, `Chartwo`, realms with `Realm`, and leave out account names, guild names, paths containing the user name, and whole SavedVariables files.
+6. **Do not edit the add-on files on the player's PC to work around a bug.** Report it, then update the add-on when the fix is merged.
+7. When a fix is merged, pull the new version into `<game>/Interface/AddOns/AICompanion/` and tell the player whether it needs `/reload` or a full restart (the pull request says which).
+
 ## Changelog
 
 - 0.8.1 — The two-minute background snapshot now runs (it never did). Rule advice always fits the 48-character tooltip limit.
