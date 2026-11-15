@@ -1,0 +1,3 @@
+# Windows scripts keep Windows line endings so they run when double-clicked.
+*.cmd text eol=crlf
+*.command text eol=lf
