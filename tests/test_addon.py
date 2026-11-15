@@ -572,11 +572,13 @@ class BagSort(GameTest):
         self.assertEqual(self.names_in_order(g), SORTED_ORDER)
 
     def sort_buttons(self, g):
-        out = []
-        for f in to_py(g.M.frames):
-            if f.get("text") == "Sort by advice":
-                out.append((f["parent"]["name"], f["point"]))
-        return out
+        found = g.lua.eval('''(function()
+            local out = {}
+            for _, f in ipairs(Mock.frames) do
+                if rawget(f, "text") == "Sort by advice" then out[#out + 1] = { f.parent.name, f.point[1] } end
+            end
+            return out end)()''')
+        return [(r[0], [r[1]]) for r in to_py(found) or []]
 
     def test_button_on_the_bag_window(self):
         w = sort_world()

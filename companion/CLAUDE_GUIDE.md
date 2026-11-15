@@ -86,7 +86,7 @@ python3 gen_data.py plans.json <game>/Interface/AddOns/AICompanion_Data/AICompan
 
 Then ask the player to `/reload`.
 
-The same file carries the plan sections (`headline`, `next`, `questing`, `professions`, `gear`, `talents`, `bags`, `blindspots`, with their `done` rules and the `sources` table). The player sees them in the in-game panel, so write every step to make sense without the web page: the title says what to do, the detail says where.
+The same file carries the plan sections (`headline`, `next`, `questing`, `professions`, `gear`, `talents`, `bags`, `blindspots`, with their `done` rules and the `sources` table). The player sees them in the in-game panel, one line per step, so write every step to make sense without the web page: the title alone says what to do (keep it short), the detail says where, and the player opens the detail by clicking the step.
 
 - Character keys are **first names** exactly as the game shows them.
 - `items`: one entry per item name, `{ "action": ..., "tip": ..., "note": ... }`.
@@ -130,7 +130,7 @@ python3 -I build.py "<SavedVariables file>" plans.json template.html out/index.h
 
 It needs Python with `lupa`. Deliver the page however the player prefers (a published page or a file). Rebuild after each new snapshot.
 
-`plans.json` schema: see `plans.example.json`. Fields per character: `headline`, `next` (steps, **in the order to do them**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order.
+`plans.json` schema: see `plans.example.json`. Fields per character: `headline`, `headlineShort` (optional, at most 100 characters, written to the player as "you"; the in-game panel shows it, or else the first sentence of `headline`), `next` (steps, **in the order to do them**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order.
 
 Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (a key in `sources`) and `done`.
 
@@ -154,6 +154,7 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 ## Changelog
 
+- 0.10.1 — Panel easier to read: 900 by 700 by default, larger text, one line per step with the detail and source on click, short coloured source tags, a two-line headline (new optional `headlineShort`), a one-line footer, and a visible scroll bar with mouse-wheel scrolling. The minimap button is round, in the standard gold ring, with a hover tooltip and pressed state.
 - 0.10.0 — In-game companion panel: the plan for the character being played (headline, Do next, Questing, Professions, Gear, Talents, Items by action), opened from a minimap button, the add-on menu where the client has one, or `/aic panel`. Steps with a `done` rule tick themselves from the latest snapshot; the rest get a tick box. `gen_data.py` now writes the plan into the data file. Needs a full game restart once (new file).
 - 0.9.1 — Bag sort works with real server timing: it waits for each move to be confirmed and accepts the in-between state of the two slots, instead of stopping at once with "your bags changed". A stop now names the bag, slot, expected and found item. `/aic sort debug` lists the bag windows found and where the button went (also saved as `sortDebug`). The button is added whenever bags are opened, not only at login.
 - 0.9.0 — `/aic sort` and a "Sort by advice" button above the bag window group the bags by action: sell, auction, mail, bank, use, craft, quest, keep, then the rest. Out of combat only; special bags untouched; stops with nothing lost if the bags change.

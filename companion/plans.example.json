@@ -7,6 +7,7 @@
  "characters": {
   "Firstname": {
    "headline": "One or two sentences: where this character stands and the single most useful thing to do next.",
+   "headlineShort": "At most 100 characters, to the player: the one thing to do next.",
    "next": [
     { "id": "f-bags", "title": "Free up bag space before leaving town", "detail": "Sell the items marked Sell to vendor.", "tag": "game", "done": { "freeSlots": 10 } },
     { "id": "f-eat", "title": "Eat before the fight", "detail": "A step the snapshot cannot detect gets no done rule, so the page shows a tick box.", "tag": "judgment" }

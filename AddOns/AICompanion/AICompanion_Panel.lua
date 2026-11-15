@@ -25,14 +25,25 @@ Panel.SECTIONS = {
     { key = "items", label = "Items" },
 }
 
--- Where a recommendation comes from, as the web dashboard labels it.
+-- Where a recommendation comes from: a short coloured tag. The source's name shows only
+-- when the step is expanded.
 Panel.TAGS = {
-    game = "From your game data",
-    lookup = "Forever source",
-    classic = "Original-game source",
-    judgment = "My judgment",
-    unverified = "Not verified",
+    game = { "Game", "66dd66" },
+    lookup = { "Forever", "66bbff" },
+    classic = { "Original", "ffaa44" },
+    judgment = { "Judgment", "cc99ff" },
+    unverified = { "Unverified", "ff6666" },
 }
+
+-- The headline shown in the panel: the plan's short headline, or the first sentence of the full one.
+function Panel.headline(plan)
+    if type(plan) ~= "table" then return nil end
+    if type(plan.headlineShort) == "string" and plan.headlineShort ~= "" then return plan.headlineShort end
+    local h = plan.headline
+    if type(h) ~= "string" then return nil end
+    local first = h:match("^(.-[%.!%?])%s") or h
+    return first
+end
 
 local ITEM_ORDER = { "sell", "auction", "mail", "bank", "use", "craft", "quest", "equip", "carry", "keep", "check" }
 
@@ -126,7 +137,9 @@ end
 
 -- One step as a panel line: its tick state and where it comes from.
 local function stepLine(step, f, ticks, sources)
-    local line = { kind = "step", id = step.id, title = step.title or "", detail = step.detail, tag = Panel.TAGS[step.tag] }
+    local tag = Panel.TAGS[step.tag]
+    local line = { kind = "step", id = step.id, title = step.title or "", detail = step.detail,
+                   tag = tag and tag[1], tagColor = tag and tag[2] }
     local src = step.source and type(sources) == "table" and sources[step.source] or nil
     if type(src) == "table" and src.label then
         line.source = (src.scope == "classic" and "Original-game source: " or "Source: ") .. src.label
@@ -190,7 +203,7 @@ function Panel.model(plans, firstName, store, ticks, adviceFor, ruleFor)
     local sources = plans.sources
     local f = Panel.facts(store) or Panel.facts({ snapshot = {} })
     local m = { name = firstName, asOf = plans.asOf, hasPlan = type(plan) == "table", sections = {} }
-    m.headline = m.hasPlan and plan.headline or ("No plan for " .. tostring(firstName) .. " yet. Ask your companion for one; until then the Items tab shows the built-in advice.")
+    m.headline = (m.hasPlan and Panel.headline(plan)) or ("No plan for " .. tostring(firstName) .. " yet. The Items tab shows the built-in advice.")
     m.takenAt = type(store) == "table" and type(store.snapshot) == "table" and store.snapshot.takenAtText or nil
     local function section(key) local t = {} m.sections[key] = t return t end
     if m.hasPlan then
@@ -252,6 +265,18 @@ function Panel.model(plans, firstName, store, ticks, adviceFor, ruleFor)
             end
         end
     end
+    if m.hasPlan then
+        -- the bags note and what the companion cannot see yet close the Do next tab
+        local t = m.sections.next
+        if m.bagsNote then
+            t[#t + 1] = { kind = "heading", title = "Bags" }
+            t[#t + 1] = { kind = "text", title = m.bagsNote }
+        end
+        if #m.blindspots > 0 then
+            t[#t + 1] = { kind = "heading", title = "I can't see yet" }
+            for _, b in ipairs(m.blindspots) do t[#t + 1] = { kind = "text", title = b } end
+        end
+    end
     m.sections.items = Panel.items(store, adviceFor, ruleFor)
     return m
 end
@@ -261,8 +286,13 @@ end
 -------------------------------------------------------------------------------
 
 local FRAME_NAME = "AICompanionPanel"
-local frame, content, tabs, pool = nil, nil, {}, {}
-local current = "next"
+local DEFAULT_W, DEFAULT_H, MIN_W, MIN_H = 900, 700, 640, 480
+-- Fonts: titles in the large font, headings larger still, nothing smaller than 12.
+local FONT_TITLE, FONT_HEADING, FONT_TEXT = "GameFontHighlightLarge", "GameFontNormalHuge", "GameFontHighlight"
+local DETAIL_GREY = 0.85
+
+local frame, scroll, content, bar, tabs, pool = nil, nil, nil, nil, {}, {}
+local current, expanded = "next", nil
 local refreshTicker
 
 local function panelDB()
@@ -290,69 +320,59 @@ local function currentModel()
 end
 Panel.currentModel = currentModel
 
-local function line(i)
-    local l = pool[i]
-    if l then return l end
-    l = {}
-    l.check = CreateFrame("CheckButton", nil, content, "UICheckButtonTemplate")
-    l.check:SetSize(20, 20)
-    l.text = content:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    l.text:SetJustifyH("LEFT")
-    l.text:SetWordWrap(true)
-    l.sub = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    l.sub:SetJustifyH("LEFT")
-    l.sub:SetWordWrap(true)
-    pool[i] = l
-    return l
-end
-
-local ACTION_LABEL = function(action)
+local function actionLabel(action)
     if action == "none" then return "No advice yet" end
     local L = core().ADVICE_LABEL and core().ADVICE_LABEL[action]
     return L and L[1] or action
 end
 
--- Turn a section of the model into display rows: { text, sub, check = {id, done, auto}, indent, color }.
-function Panel.rows(m, key)
+-- A section of the model as display rows. Steps show one line (tick box, title, tag);
+-- the expanded step also shows its detail and source.
+-- Row: { key, text, tag, tagColor, sub, check = {id, done, auto}, heading, expandable }
+function Panel.rows(m, key, open)
     local rows = {}
     local function add(r) rows[#rows + 1] = r end
     if key == "items" then
-        for _, g in ipairs(m.sections.items or {}) do
-            add({ text = ACTION_LABEL(g.action), color = "heading" })
+        for gi, g in ipairs(m.sections.items or {}) do
+            add({ key = "g" .. gi, text = actionLabel(g.action), heading = true })
             for _, it in ipairs(g.items) do
-                local sub = it.note
-                if it.rule and sub then sub = sub .. " (rule)" end
-                if it.where == "bank" then sub = (sub and sub .. " " or "") .. "In the bank." end
-                add({ text = it.name .. (it.count > 1 and (" x" .. it.count) or ""), sub = sub, indent = 1 })
+                local rkey = "item:" .. it.name
+                local sub
+                if open == rkey then
+                    sub = it.note
+                    if it.rule and sub then sub = sub .. " (built-in rule)" end
+                    if it.where == "bank" then sub = (sub and sub .. " " or "") .. "In the bank." end
+                end
+                add({ key = rkey, text = it.name .. (it.count > 1 and (" x" .. it.count) or ""), sub = sub,
+                      expandable = it.note ~= nil or it.where == "bank" })
             end
         end
-        if #rows == 0 then add({ text = "No snapshot of your bags yet. Type /aic to take one." }) end
+        if #rows == 0 then add({ key = "empty", text = "No snapshot of your bags yet. Type /aic to take one." }) end
         return rows
     end
-    local section = m.sections[key]
     if not m.hasPlan then
-        add({ text = "No plan for this character yet." })
+        add({ key = "noplan", text = "No plan for this character yet." })
         return rows
     end
-    for _, l in ipairs(section or {}) do
-        local meta = {}
-        if l.tag then meta[#meta + 1] = l.tag end
-        if l.source then meta[#meta + 1] = l.source end
+    for i, l in ipairs(m.sections[key] or {}) do
+        local rkey = l.id or (key .. ":" .. i)
         if l.kind == "heading" then
-            add({ text = l.title, sub = l.detail, color = "heading" })
+            add({ key = rkey, text = l.title, heading = true, sub = l.detail })
         elseif l.kind == "text" then
-            add({ text = l.title })
+            add({ key = rkey, text = l.title })
         else
-            local detail = l.detail
-            if #meta > 0 then detail = (detail and detail .. "  " or "") .. "[" .. table.concat(meta, "; ") .. "]" end
+            local more = {}
+            if l.detail and l.detail ~= "" then more[#more + 1] = l.detail end
+            if l.source then more[#more + 1] = l.source end
             local title = (l.number and (l.number .. ". ") or "") .. l.title
-            if l.kind == "step" and l.auto then title = title .. (l.done and "  (done)" or "") end
-            add({ text = title, sub = detail, indent = l.kind == "note" and 1 or 0,
+            add({ key = rkey, text = title, tag = l.tag, tagColor = l.tagColor,
+                  sub = (open == rkey and #more > 0) and table.concat(more, "\n") or nil,
+                  expandable = #more > 0,
                   check = l.kind == "step" and { id = l.id, done = l.done, auto = l.auto } or nil,
-                  color = l.done and "done" or nil })
+                  done = l.done })
         end
     end
-    if #rows == 0 then add({ text = "Nothing planned here yet." }) end
+    if #rows == 0 then add({ key = "nothing", text = "Nothing planned here yet." }) end
     return rows
 end
 
@@ -361,65 +381,109 @@ local function textHeight(fs, default)
     return (type(h) == "number" and h > 0) and h or default
 end
 
-local function render()
+local function rowFrame(i)
+    local r = pool[i]
+    if r then return r end
+    r = CreateFrame("Button", nil, content)
+    r.check = CreateFrame("CheckButton", nil, r, "UICheckButtonTemplate")
+    r.check:SetSize(24, 24)
+    r.title = r:CreateFontString(nil, "OVERLAY", FONT_TITLE)
+    r.title:SetJustifyH("LEFT")
+    r.title:SetWordWrap(false)
+    r.tag = r:CreateFontString(nil, "OVERLAY", FONT_TEXT)
+    r.tag:SetJustifyH("RIGHT")
+    r.sub = r:CreateFontString(nil, "OVERLAY", FONT_TEXT)
+    r.sub:SetJustifyH("LEFT")
+    r.sub:SetWordWrap(true)
+    r.sub:SetTextColor(DETAIL_GREY, DETAIL_GREY, DETAIL_GREY)
+    r.hl = r:CreateTexture(nil, "HIGHLIGHT")
+    r.hl:SetAllPoints(r)
+    r.hl:SetColorTexture(1, 1, 1, 0.06)
+    pool[i] = r
+    return r
+end
+
+local function updateBar()
+    if not (scroll and bar) then return end
+    local visible = scroll:GetHeight() or ((frame:GetHeight() or DEFAULT_H) - 150)
+    local range = math.max(0, (content.fullHeight or 0) - visible)
+    bar:SetMinMaxValues(0, range)
+    if range <= 0 then bar:Hide() scroll:SetVerticalScroll(0) bar:SetValue(0) else bar:Show() end
+    if (bar:GetValue() or 0) > range then bar:SetValue(range) end
+end
+
+local render
+render = function()
     if not frame or not frame:IsShown() then return end
     local m, ticks = currentModel()
     if not m then return end
-    frame.title:SetText("AI Companion: " .. tostring(m.name) .. (m.asOf and ("  (plan " .. m.asOf .. ")") or ""))
+    frame.title:SetText("AI Companion: " .. tostring(m.name))
     frame.headline:SetText(m.headline or "")
-    local extra = {}
-    if m.bagsNote then extra[#extra + 1] = "Bags: " .. m.bagsNote end
-    for _, b in ipairs(m.blindspots or {}) do extra[#extra + 1] = "I can't see yet: " .. b end
-    if m.takenAt then extra[#extra + 1] = "Snapshot " .. m.takenAt end
-    frame.footer:SetText(table.concat(extra, "   "))
+    frame.footer:SetText(m.takenAt and ("Snapshot " .. m.takenAt .. (m.asOf and ("   Plan " .. m.asOf) or "")) or "No snapshot yet")
     for key, tab in pairs(tabs) do
         if key == current then tab:LockHighlight() else tab:UnlockHighlight() end
     end
-    local rows = Panel.rows(m, current)
+    local rows = Panel.rows(m, current, expanded)
     frame.lastRows = rows
-    local width = (frame:GetWidth() or 460) - 60
-    local y = -4
+    local width = (frame:GetWidth() or DEFAULT_W) - 64
+    content:SetWidth(width)
+    local y = 0
     for i, r in ipairs(rows) do
-        local l = line(i)
-        local x = 4 + (r.indent or 0) * 16
+        local f = rowFrame(i)
+        local x = 6
+        f:ClearAllPoints()
+        f:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -y)
+        f:SetWidth(width)
         if r.check then
-            l.check:ClearAllPoints()
-            l.check:SetPoint("TOPLEFT", content, "TOPLEFT", x, y + 2)
-            l.check:SetChecked(r.check.done == true)
-            l.check:SetEnabled(not r.check.auto and r.check.id ~= nil)
-            l.check:SetScript("OnClick", function(btn)
+            f.check:ClearAllPoints()
+            f.check:SetPoint("TOPLEFT", f, "TOPLEFT", x, 0)
+            f.check:SetChecked(r.check.done == true)
+            f.check:SetEnabled(not r.check.auto and r.check.id ~= nil)
+            f.check:SetScript("OnClick", function(btn)
                 if r.check.auto or not r.check.id then return end
                 ticks[r.check.id] = btn:GetChecked() and true or nil
                 render()
             end)
-            l.check:Show()
-            x = x + 22
+            f.check:Show()
+            x = x + 30
         else
-            l.check:Hide()
+            f.check:Hide()
         end
-        l.text:ClearAllPoints()
-        l.text:SetPoint("TOPLEFT", content, "TOPLEFT", x, y)
-        l.text:SetWidth(width - x)
-        l.text:SetText(r.text or "")
-        if r.color == "heading" then l.text:SetTextColor(1, 0.82, 0)
-        elseif r.color == "done" then l.text:SetTextColor(0.5, 0.8, 0.5)
-        else l.text:SetTextColor(1, 1, 1) end
-        l.text:Show()
-        y = y - textHeight(l.text, 14) - 2
-        if r.sub and r.sub ~= "" then
-            l.sub:ClearAllPoints()
-            l.sub:SetPoint("TOPLEFT", content, "TOPLEFT", x, y)
-            l.sub:SetWidth(width - x)
-            l.sub:SetText(r.sub)
-            l.sub:Show()
-            y = y - textHeight(l.sub, 12) - 2
+        f.title:SetFontObject(r.heading and FONT_HEADING or FONT_TITLE)
+        f.title:ClearAllPoints()
+        f.title:SetPoint("TOPLEFT", f, "TOPLEFT", x, -3)
+        f.title:SetWidth(width - x - 96)
+        f.title:SetText(r.text or "")
+        if r.heading then f.title:SetTextColor(1, 0.82, 0)
+        elseif r.done then f.title:SetTextColor(0.55, 0.85, 0.55)
+        else f.title:SetTextColor(1, 1, 1) end
+        f.tag:ClearAllPoints()
+        f.tag:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -5)
+        f.tag:SetText(r.tag and ("|cff" .. (r.tagColor or "ffffff") .. r.tag .. "|r") or "")
+        local h = math.max(textHeight(f.title, r.heading and 22 or 18), 24) + 4
+        if r.sub then
+            f.sub:ClearAllPoints()
+            f.sub:SetPoint("TOPLEFT", f, "TOPLEFT", x, -h)
+            f.sub:SetWidth(width - x - 12)
+            f.sub:SetText(r.sub)
+            f.sub:Show()
+            h = h + textHeight(f.sub, 14) + 6
         else
-            l.sub:Hide()
+            f.sub:Hide()
         end
-        y = y - 6
+        f:SetHeight(h)
+        f:SetScript("OnClick", function()
+            if not r.expandable then return end
+            expanded = (expanded ~= r.key) and r.key or nil   -- one step open at a time
+            render()
+        end)
+        f:Show()
+        y = y + h + 2
     end
-    for i = #rows + 1, #pool do pool[i].check:Hide() pool[i].text:Hide() pool[i].sub:Hide() end
-    content:SetSize(width, math.max(-y, 10))
+    for i = #rows + 1, #pool do pool[i]:Hide() end
+    content.fullHeight = y
+    content:SetHeight(math.max(y, 10))
+    updateBar()
 end
 Panel.render = render
 
@@ -429,64 +493,97 @@ local function savePosition()
     local point, _, relPoint, x, y = frame:GetPoint(1)
     if point then pdb.point = { point, relPoint, x, y } end
     local w, h = frame:GetWidth(), frame:GetHeight()
-    if w and h then pdb.width, pdb.height = w, h end
+    if w and h then pdb.width, pdb.height = math.max(w, MIN_W), math.max(h, MIN_H) end
 end
 
 local function build()
     if frame then return frame end
     local pdb = panelDB() or {}
     local f = CreateFrame("Frame", FRAME_NAME, UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
-    f:SetSize(pdb.width or 480, pdb.height or 520)
+    f:SetSize(math.max(pdb.width or DEFAULT_W, MIN_W), math.max(pdb.height or DEFAULT_H, MIN_H))
     if type(pdb.point) == "table" then f:SetPoint(pdb.point[1], UIParent, pdb.point[2], pdb.point[3], pdb.point[4])
     else f:SetPoint("CENTER") end
     f:SetFrameStrata("DIALOG")
     f:SetClampedToScreen(true)
     if f.SetBackdrop then
         f:SetBackdrop({ bgFile = "Interface\\ChatFrame\\ChatFrameBackground", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-                        edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-        f:SetBackdropColor(0, 0, 0, 0.92)
+                        edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 } })
+        f:SetBackdropColor(0.05, 0.05, 0.07, 0.95)
     end
     f:EnableMouse(true)
     f:SetMovable(true)
     f:SetResizable(true)
-    if f.SetResizeBounds then f:SetResizeBounds(360, 300, 900, 1000) end
+    if f.SetResizeBounds then f:SetResizeBounds(MIN_W, MIN_H, 1600, 1200) end
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", function(self) self:StartMoving() end)
     f:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() savePosition() end)
-    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    f.title:SetPoint("TOPLEFT", 12, -10)
+    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    f.title:SetPoint("TOPLEFT", 16, -14)
     local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", 0, 0)
+    close:SetPoint("TOPRIGHT", -2, -2)
     close:SetScript("OnClick", function() f:Hide() end)
-    f.headline = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    f.headline:SetPoint("TOPLEFT", 12, -32)
-    f.headline:SetPoint("RIGHT", f, "RIGHT", -12, 0)
+    -- headline: two lines at most, with its own space above the tabs
+    f.headline = f:CreateFontString(nil, "OVERLAY", FONT_TITLE)
+    f.headline:SetPoint("TOPLEFT", 16, -40)
+    f.headline:SetPoint("RIGHT", f, "RIGHT", -16, 0)
+    f.headline:SetHeight(44)
     f.headline:SetJustifyH("LEFT")
+    f.headline:SetJustifyV("TOP")
     f.headline:SetWordWrap(true)
+    if f.headline.SetMaxLines then f.headline:SetMaxLines(2) end
     local prev
-    for i, s in ipairs(Panel.SECTIONS) do
+    for _, s in ipairs(Panel.SECTIONS) do
         local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        b:SetSize(74, 20)
-        if prev then b:SetPoint("LEFT", prev, "RIGHT", 2, 0) else b:SetPoint("TOPLEFT", 10, -76) end
+        b:SetSize(104, 26)
+        if prev then b:SetPoint("LEFT", prev, "RIGHT", 4, 0) else b:SetPoint("TOPLEFT", 14, -90) end
         b:SetText(s.label)
-        b:SetScript("OnClick", function() current = s.key render() end)
+        b:SetScript("OnClick", function() current, expanded = s.key, nil render() end)
         tabs[s.key] = b
         prev = b
     end
-    local sf = CreateFrame("ScrollFrame", "AICompanionPanelScroll", f, "UIPanelScrollFrameTemplate")
-    sf:SetPoint("TOPLEFT", 12, -102)
-    sf:SetPoint("BOTTOMRIGHT", -32, 36)
-    content = CreateFrame("Frame", nil, sf)
-    content:SetSize(400, 10)
-    sf:SetScrollChild(content)
-    f.footer = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    f.footer:SetPoint("BOTTOMLEFT", 12, 12)
-    f.footer:SetPoint("RIGHT", f, "RIGHT", -28, 0)
+    -- the list, with its own scroll bar (a visible track and thumb) and mouse-wheel scrolling
+    scroll = CreateFrame("ScrollFrame", nil, f)
+    scroll:SetPoint("TOPLEFT", 16, -126)
+    scroll:SetPoint("BOTTOMRIGHT", -34, 40)
+    content = CreateFrame("Frame", nil, scroll)
+    content:SetSize(DEFAULT_W - 64, 10)
+    scroll:SetScrollChild(content)
+    bar = CreateFrame("Slider", nil, f)
+    bar:SetOrientation("VERTICAL")
+    bar:SetWidth(12)
+    bar:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -126)
+    bar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14, 40)
+    local track = bar:CreateTexture(nil, "BACKGROUND")
+    track:SetAllPoints(bar)
+    track:SetColorTexture(0.2, 0.2, 0.22, 0.9)
+    local thumb = bar:CreateTexture(nil, "OVERLAY")
+    thumb:SetColorTexture(0.75, 0.75, 0.78, 1)
+    thumb:SetSize(12, 48)
+    bar:SetThumbTexture(thumb)
+    bar:SetValueStep(1)
+    bar:SetMinMaxValues(0, 0)
+    bar:SetValue(0)
+    bar:SetScript("OnValueChanged", function(_, value) scroll:SetVerticalScroll(value or 0) end)
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", function(_, delta)
+        local lo, hi = bar:GetMinMaxValues()
+        local v = math.min(math.max((bar:GetValue() or 0) - (delta or 0) * 48, lo or 0), hi or 0)
+        bar:SetValue(v)
+        scroll:SetVerticalScroll(v)
+    end)
+    -- footer strip: one line, below the list, never under it
+    f.footer = f:CreateFontString(nil, "OVERLAY", FONT_TEXT)
+    f.footer:SetPoint("BOTTOMLEFT", 16, 14)
+    f.footer:SetPoint("RIGHT", f, "RIGHT", -40, 0)
     f.footer:SetJustifyH("LEFT")
+    f.footer:SetWordWrap(false)
+    f.footer:SetTextColor(0.7, 0.7, 0.7)
     local grip = CreateFrame("Button", nil, f)
     grip:SetSize(16, 16)
     grip:SetPoint("BOTTOMRIGHT", -4, 4)
     grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
     grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
     grip:SetScript("OnMouseUp", function() f:StopMovingOrSizing() savePosition() render() end)
     f:SetScript("OnShow", function()
@@ -514,16 +611,35 @@ function Panel.toggle()
     frame:Show()   -- OnShow draws it
 end
 Panel.isShown = function() return frame ~= nil and frame:IsShown() end
-Panel.select = function(key) current = key render() end
+Panel.select = function(key) current, expanded = key, nil render() end
+Panel.expand = function(key) expanded = key render() end
 
 -------------------------------------------------------------------------------
--- Minimap button, draggable around the minimap edge, and the add-on menu entry
+-- Minimap button: round, in the standard gold ring, like the game's own and other add-ons'.
+-- Draggable around the minimap edge; position kept.
 -------------------------------------------------------------------------------
+
+-- First art file the client really has, so a missing file never shows as a blank square.
+local function firstFile(list)
+    for _, path in ipairs(list) do
+        local id = type(GetFileIDFromPath) == "function" and GetFileIDFromPath(path) or nil
+        if type(id) == "number" and id > 0 then return path end
+    end
+    return nil
+end
+
+Panel.ICONS = { "Interface\\Icons\\INV_Misc_Book_09", "Interface\\Icons\\INV_Misc_Book_11",
+                "Interface\\Icons\\INV_Scroll_03", "Interface\\Icons\\INV_Misc_Note_01" }
+local RING = "Interface\\Minimap\\MiniMap-TrackingBorder"
+local RING_ATLAS = "ui-hud-minimap-button"
+local BACKGROUND = "Interface\\Minimap\\UI-Minimap-Background"
+local HIGHLIGHT = "Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight"
+local ROUND_MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 
 local button
 local function placeButton(angle)
     if not button or not Minimap then return end
-    local r = ((Minimap:GetWidth() or 140) / 2) + 10
+    local r = ((Minimap:GetWidth() or 140) / 2) + 5
     local a = math.rad(angle or 225)
     button:ClearAllPoints()
     button:SetPoint("CENTER", Minimap, "CENTER", math.cos(a) * r, math.sin(a) * r)
@@ -547,18 +663,55 @@ local function buildButton()
     b:SetSize(31, 31)
     b:SetFrameStrata("MEDIUM")
     b:SetFrameLevel(8)
-    b:SetNormalTexture("Interface\\Icons\\INV_Misc_Book_09")
-    b:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
     b:RegisterForClicks("AnyUp")
     b:RegisterForDrag("LeftButton")
+    b.art = {}
+    local bg = b:CreateTexture(nil, "BACKGROUND")
+    bg:SetSize(24, 24)
+    bg:SetPoint("CENTER")
+    bg:SetTexture(BACKGROUND)
+    local icon = b:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(20, 20)
+    icon:SetPoint("CENTER")
+    local iconFile = firstFile(Panel.ICONS)
+    icon:SetTexture(iconFile or Panel.ICONS[1])
+    icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    if b.CreateMaskTexture and icon.AddMaskTexture then      -- clip the square icon to a circle
+        local mask = b:CreateMaskTexture()
+        mask:SetTexture(ROUND_MASK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        mask:SetAllPoints(icon)
+        icon:AddMaskTexture(mask)
+        b.art.mask = ROUND_MASK
+    end
+    local ring = b:CreateTexture(nil, "OVERLAY")
+    if firstFile({ RING }) then
+        ring:SetSize(50, 50)
+        ring:SetPoint("TOPLEFT")
+        ring:SetTexture(RING)
+        b.art.ring = RING
+    elseif C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(RING_ATLAS) then
+        ring:SetSize(36, 36)
+        ring:SetPoint("CENTER")
+        ring:SetAtlas(RING_ATLAS)
+        b.art.ring = RING_ATLAS
+    end
+    b:SetHighlightTexture(HIGHLIGHT, "ADD")
+    b.art.icon, b.icon = iconFile or Panel.ICONS[1], icon
+    -- pressed: the icon shifts slightly, as game buttons do
+    b:SetScript("OnMouseDown", function() icon:ClearAllPoints() icon:SetPoint("CENTER", 1, -1) end)
+    b:SetScript("OnMouseUp", function() icon:ClearAllPoints() icon:SetPoint("CENTER") end)
     b:SetScript("OnClick", function() Panel.toggle() end)
     b:SetScript("OnDragStart", function(self) self:SetScript("OnUpdate", function() pcall(dragUpdate) end) end)
-    b:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+    b:SetScript("OnDragStop", function(self)
+        self:SetScript("OnUpdate", nil)
+        icon:ClearAllPoints() icon:SetPoint("CENTER")
+    end)
     b:SetScript("OnEnter", function(self)
         if GameTooltip and GameTooltip.SetOwner then
             GameTooltip:SetOwner(self, "ANCHOR_LEFT")
             GameTooltip:SetText("AI Companion")
-            GameTooltip:AddLine("Click: your plan. Drag: move this button.", 1, 1, 1)
+            GameTooltip:AddLine("Click: open the plan", 1, 1, 1)
+            GameTooltip:AddLine("Drag: move this button", 1, 1, 1)
             GameTooltip:Show()
         end
     end)
@@ -575,7 +728,7 @@ local function registerCompartment()
     if type(c) ~= "table" or type(c.RegisterAddon) ~= "function" then return false end
     return pcall(c.RegisterAddon, c, {
         text = "AI Companion",
-        icon = "Interface\\Icons\\INV_Misc_Book_09",
+        icon = firstFile(Panel.ICONS) or Panel.ICONS[1],
         notCheckable = true,
         func = function() Panel.toggle() end,
     })

@@ -103,6 +103,7 @@ end
 
 local function noop() end
 local Widget = {}
+-- Unknown methods do nothing; unset fields read as nil through the getters above (rawget).
 Widget.__index = function(_, k) return Widget[k] or noop end
 function Widget:SetScript(name, fn) self.scripts[name] = fn end
 function Widget:GetScript(name) return self.scripts[name] end
@@ -114,7 +115,7 @@ function Widget:RegisterEvent(e) self.events[e] = true end
 function Widget:UnregisterEvent(e) self.events[e] = nil end
 function Widget:IsEventRegistered(e) return self.events[e] == true end
 function Widget:SetText(t) self.text = t end
-function Widget:GetText() return self.text end
+function Widget:GetText() return rawget(self, "text") end
 function Widget:Show()
     if self.shown then return end
     self.shown = true
@@ -129,8 +130,8 @@ function Widget:SetShown(v) if v then self:Show() else self:Hide() end end
 function Widget:SetSize(w, h) self.width, self.height = w, h end
 function Widget:SetWidth(w) self.width = w end
 function Widget:SetHeight(h) self.height = h end
-function Widget:GetWidth() return self.width end
-function Widget:GetHeight() return self.height end
+function Widget:GetWidth() return rawget(self, "width") end
+function Widget:GetHeight() return rawget(self, "height") end
 function Widget:SetPoint(...) self.point = { ... } end
 function Widget:ClearAllPoints() self.point = nil end
 function Widget:GetPoint() if self.point then
@@ -145,11 +146,39 @@ function Widget:GetChecked() return self.checked == true end
 function Widget:SetEnabled(v) self.enabled = v ~= false end
 function Widget:IsEnabled() return self.enabled ~= false end
 function Widget:IsShown() return self.shown == true end
-function Widget:CreateFontString() return M.widget("FontString") end
-function Widget:CreateTexture() return M.widget("Texture") end
+M.regions = {}
+local function region(kind, parent, layer, template)
+    local r = M.widget(kind)
+    r.parent, r.layer, r.template, r.font = parent, layer, template, kind == "FontString" and template or nil
+    M.regions[#M.regions + 1] = r
+    return r
+end
+function Widget:CreateFontString(name, layer, font) return region("FontString", self, layer, font) end
+function Widget:CreateTexture(name, layer) return region("Texture", self, layer) end
+function Widget:CreateMaskTexture() return region("MaskTexture", self) end
+function Widget:SetFontObject(font) self.font = font end
+function Widget:SetTexture(t) self.texture = t return true end
+function Widget:SetAtlas(a) self.atlas = a return true end
+function Widget:GetTexture() return rawget(self, "texture") end
+function Widget:AddMaskTexture(m) self.mask = m end
+function Widget:SetNormalTexture(t) self.normalTexture = t end
+function Widget:SetHighlightTexture(t) self.highlightTexture = t end
+function Widget:SetPushedTexture(t) self.pushedTexture = t end
+function Widget:SetMinMaxValues(lo, hi) self.min, self.max = lo, hi end
+function Widget:GetMinMaxValues() return rawget(self, "min") or 0, rawget(self, "max") or 0 end
+function Widget:SetValue(v)
+    self.value = v
+    if self.scripts.OnValueChanged then self.scripts.OnValueChanged(self, v) end
+end
+function Widget:GetValue() return rawget(self, "value") or 0 end
+function Widget:SetMaxLines(n) self.maxLines = n end
+function Widget:SetScrollChild(c) self.scrollChild = c end
+function Widget:SetFrameStrata(s) self.strata = s end
+function Widget:SetVerticalScroll(v) self.scrollY = v end
+function Widget:GetVerticalScroll() return rawget(self, "scrollY") or 0 end
 function Widget:Click() local f = self.scripts.OnClick if f then run("slash", "OnClick", f, self, "LeftButton") end end
 function Widget:SetPoint(...) self.point = { ... } end
-function Widget:GetName() return self.name end
+function Widget:GetName() return rawget(self, "name") end
 function Widget:SetID(id) self.id = id end
 function Widget:GetID() return self.id or 0 end
 
@@ -172,6 +201,21 @@ Minimap:SetSize(140, 140)
 UISpecialFrames = {}
 M.cursorX, M.cursorY = 700, 600
 function GetCursorPosition() return M.cursorX, M.cursorY end
+
+-- Art files and atlases. W.missingFiles lists paths the client lacks.
+function GetFileIDFromPath(path)
+    if (W.missingFiles or {})[path] then return nil end
+    return 100000 + #tostring(path)
+end
+C_Texture = {
+    GetAtlasInfo = function(atlas) if (W.missingFiles or {})[atlas] then return nil end return { width = 32, height = 32 } end,
+}
+
+GameTooltip = M.widget("GameTooltip", "GameTooltip")
+GameTooltip.shown = false
+function GameTooltip:SetOwner(owner) self.owner, self.lines = owner, {} end
+function GameTooltip:SetText(t) self.lines = { t } end
+function GameTooltip:AddLine(t) self.lines[#self.lines + 1] = t end
 
 function M.fire(event, ...)
     for _, f in ipairs(M.frames) do

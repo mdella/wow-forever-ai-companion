@@ -10,7 +10,7 @@ def q(s):
     for a, b in REPL.items(): s = s.replace(a, b)
     s = s.encode("ascii", "ignore").decode().replace("|", "/")  # the game treats | as a formatting escape
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ") + '"'
-PLAN_KEYS = ["headline", "next", "questing", "professions", "gear", "talents", "bags", "blindspots"]
+PLAN_KEYS = ["headline", "headlineShort", "next", "questing", "professions", "gear", "talents", "bags", "blindspots"]
 def lua(v, indent="    "):
     """A JSON value as a Lua literal. Strings go through q(), so they are plain ASCII."""
     if isinstance(v, bool): return "true" if v else "false"
@@ -48,6 +48,7 @@ out += ["    },", "}", ""]
 plans = {}
 for cname, c in d.get("characters", {}).items():
     p = {k: c[k] for k in PLAN_KEYS if c.get(k) not in (None, "", [], {})}
+    assert len(p.get("headlineShort", "")) <= 100, "headlineShort over 100 characters for %s" % cname
     if p: plans[cname] = p
 out += ["AICompanionPlans = {",
         "    asOf = %s," % q(datetime.date.today().strftime("%b %d").replace(" 0", " ")),
