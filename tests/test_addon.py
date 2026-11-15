@@ -571,18 +571,96 @@ class BagSort(GameTest):
         g.advance(120)
         self.assertEqual(self.names_in_order(g), SORTED_ORDER)
 
-    def test_button_on_the_bag_window(self):
-        g = Game(sort_world())
-        self.games.append(g)
-        g.start()
-        self.assertIsNone(g.lua.globals().ContainerFrame1)   # no bag window in the stand-in by default
-        g2 = Game(sort_world())
-        self.games.append(g2)
-        g2.lua_prelude = "M.widget('Frame', 'ContainerFrame1')"
-        g2.start()
-        frames = [f for f in to_py(g2.M.frames) if f.get("text") == "Sort by advice"]
-        self.assertEqual(len(frames), 1)
+    def sort_buttons(self, g):
+        out = []
+        for f in to_py(g.M.frames):
+            if f.get("text") == "Sort by advice":
+                out.append((f["parent"]["name"], f["point"]))
+        return out
 
+    def test_button_on_the_bag_window(self):
+        w = sort_world()
+        w["bagFrames"] = "login"
+        g = self.game(w)
+        buttons = self.sort_buttons(g)
+        self.assertEqual(sorted(n for n, _ in buttons), ["ContainerFrame1", "ContainerFrameCombinedBags"])
+        self.assertEqual(buttons[0][1][0], "BOTTOMRIGHT")   # sits above the window's top edge
+
+    def test_button_added_when_bags_first_open(self):
+        w = sort_world()
+        w["bagFrames"] = "late"
+        g = self.game(w)
+        self.assertEqual(self.sort_buttons(g), [])
+        g.lua.execute("OpenAllBags()")
+        self.assertEqual(len(self.sort_buttons(g)), 2)
+        g.lua.execute("ToggleAllBags() ToggleAllBags()")
+        self.assertEqual(len(self.sort_buttons(g)), 2)      # not added twice
+
+    def test_debug_report(self):
+        w = sort_world()
+        w["bagFrames"] = "login"
+        g = self.game(w)
+        g.slash("/aic sort debug")
+        chat = " ".join(g.chat())
+        self.assertIn("bag windows found: ContainerFrameCombinedBags (enumerated)", chat)
+        self.assertIn("sort button on: ContainerFrameCombinedBags, ContainerFrame1", chat)
+        g.slash("/aic sort")
+        g.advance(30)
+        g.slash("/aic save")
+        debug = g.disk()["sortDebug"]
+        self.assertGreater(debug["lastRun"]["moves"], 0)
+        self.assertIn("ContainerFrame1", debug["buttons"])
+
+
+class BagSortRealTiming(GameTest):
+    """Moves confirmed late and unevenly, as in the real client (issue #8)."""
+
+    def run_sort(self, **timing):
+        w = sort_world()
+        w.update(timing)
+        g = self.game(w)
+        before = BagSort.contents(self, g)
+        g.slash("/aic sort")
+        g.advance(120)
+        self.assertEqual(BagSort.contents(self, g), before)
+        return g
+
+    def layout(self, g, bag=None):
+        return BagSort.layout(self, g, bag)
+
+    def assert_sorted(self, g):
+        self.assertEqual(BagSort.names_in_order(self, g), SORTED_ORDER)
+        self.assertTrue(any("bags sorted by advice" in l for l in g.chat()), g.chat())
+
+    def test_default_timing(self):
+        self.assert_sorted(self.run_sort())
+
+    def test_lock_clears_before_the_contents_change(self):
+        self.assert_sorted(self.run_sort(moveUnlock=0.1, moveConfirm=0.4, moveSkew=0.0))
+
+    def test_the_two_slots_of_a_swap_update_apart(self):
+        self.assert_sorted(self.run_sort(moveUnlock=0.6, moveConfirm=0.2, moveSkew=0.5))
+
+    def test_slow_server(self):
+        self.assert_sorted(self.run_sort(moveUnlock=1.5, moveConfirm=1.2, moveSkew=0.6))
+
+    def test_instant_server(self):
+        self.assert_sorted(self.run_sort(moveUnlock=0.0, moveConfirm=0.0, moveSkew=0.0))
+
+    def test_a_move_the_game_never_confirms(self):
+        g = self.run_sort(moveUnlock=200, moveConfirm=200, moveSkew=0)
+        line = next(l for l in g.chat() if "did not confirm a move" in l)
+        self.assertIn("to bag 0 slot", line)
+        g.advance(300)   # let the stand-in client finish, so nothing is left locked
+
+    def test_real_change_is_reported_with_detail(self):
+        g = self.game(sort_world())
+        g.slash("/aic sort")
+        g.advance(0.05)
+        g.lua.execute("WORLD.bags[0].items[16] = { id = %d, count = 1 }" % W.JUNK)
+        g.advance(30)
+        line = next(l for l in g.chat() if "your bags changed" in l)
+        self.assertIn("(bag 0 slot 16: expected empty, found Broken Fang)", line)
 
 if __name__ == "__main__":
     unittest.main()

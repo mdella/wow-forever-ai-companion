@@ -121,6 +121,10 @@ function Widget:IsShown() return self.shown == true end
 function Widget:CreateFontString() return M.widget("FontString") end
 function Widget:CreateTexture() return M.widget("Texture") end
 function Widget:Click() local f = self.scripts.OnClick if f then run("slash", "OnClick", f, self, "LeftButton") end end
+function Widget:SetPoint(...) self.point = { ... } end
+function Widget:GetName() return self.name end
+function Widget:SetID(id) self.id = id end
+function Widget:GetID() return self.id or 0 end
 
 function M.widget(kind, name)
     local w = setmetatable({ kind = kind, name = name, scripts = {}, events = {}, shown = true }, Widget)
@@ -171,6 +175,35 @@ function ReloadUI()
 end
 
 function InCombatLockdown() return W.inCombat == true end
+
+-- hooksecurefunc(name, fn) or hooksecurefunc(table, name, fn): run fn after the original.
+function hooksecurefunc(a, b, c)
+    local t, name, fn = _G, a, b
+    if type(a) == "table" then t, name, fn = a, b, c end
+    local orig = t[name]
+    t[name] = function(...) local r = { orig(...) } fn(...) return unpack(r) end
+end
+
+-- Bag windows. W.bagFrames: nil (none), "login" (exist when add-ons load) or "late" (made
+-- the first time the bags are opened, as a client may do).
+M.bagWindows = {}
+local function makeBagWindows()
+    if #M.bagWindows > 0 then return end
+    local combined = M.widget("Frame", "ContainerFrameCombinedBags")
+    combined:SetID(0)
+    combined.shown = false
+    M.bagWindows[1] = combined
+    for i = 1, 6 do
+        local f = M.widget("Frame", "ContainerFrame" .. i)
+        f:SetID(i - 1)
+        f.shown = false
+        M.bagWindows[#M.bagWindows + 1] = f
+    end
+end
+if W.bagFrames == "login" then makeBagWindows() end
+function ContainerFrameUtil_EnumerateContainerFrames() return ipairs(M.bagWindows) end
+function OpenAllBags() makeBagWindows() M.bagWindows[1]:Show() end
+function ToggleAllBags() makeBagWindows() local f = M.bagWindows[1] if f.shown then f:Hide() else f:Show() end end
 
 -- Values the client hides from add-ons. Only defined when a test lists some, like a client
 -- without the feature.
@@ -336,11 +369,18 @@ C_TooltipInfo = {
 -------------------------------------------------------------------------------
 -- Cursor and item moves, as the client does them:
 -- picking up an item and putting it on an empty slot moves it; on a different item, swaps;
--- on the same stackable item, merges the stacks. Moved slots stay locked until the server
--- confirms (MOVE_LOCK seconds). A special bag (family ~= 0) only takes items of its kind.
+-- on the same stackable item, merges the stacks. A special bag (family ~= 0) only takes items
+-- of its kind.
+-- Like the real client, a move is not applied at once. Both slots lock straight away; the
+-- server confirms later. Each slot's contents change at its own moment (moveConfirm, plus
+-- moveSkew for the second slot), and the locks clear at moveUnlock, which may be before the
+-- contents change. Events: ITEM_LOCK_CHANGED on each lock change, BAG_UPDATE per slot, then
+-- BAG_UPDATE_DELAYED.
 -------------------------------------------------------------------------------
 
-local MOVE_LOCK = W.moveLock or 0.2
+local MOVE_CONFIRM = W.moveConfirm or 0.25
+local MOVE_SKEW = W.moveSkew or 0.1
+local MOVE_UNLOCK = W.moveUnlock or 0.15
 M.cursor = nil
 M.moves = 0
 
@@ -351,13 +391,10 @@ local function slotRef(b, s)
     return x
 end
 
-local function lock(x, s)
+local function setLock(x, s, on, b)
     local it = x.items[s]
-    if it then it.locked = true end
-    schedule(MOVE_LOCK, function()
-        if x.items[s] then x.items[s].locked = nil end
-        M.fire("BAG_UPDATE_DELAYED")
-    end)
+    if it then it.locked = on or nil end
+    M.fire("ITEM_LOCK_CHANGED", b, s)
 end
 
 C_Container.PickupContainerItem = function(b, s)
@@ -373,7 +410,7 @@ C_Container.PickupContainerItem = function(b, s)
     end
     if W.refusePlace then return end   -- the client keeps the item on the cursor
     local from = M.cursor
-    local fx, fs = from.x, from.slot
+    local fx, fs, fb = from.x, from.slot, from.bag
     local moving = fx.items[fs]
     M.cursor = nil
     if fx == x and fs == s then return end
@@ -384,16 +421,30 @@ C_Container.PickupContainerItem = function(b, s)
         violation("swapped an item into a special bag that does not take it") M.cursor = from return
     end
     M.moves = M.moves + 1
+    -- what each slot will hold once the server confirms
+    local destAfter, srcAfter
     if here and here.id == moving.id and (ITEMS[here.id] and (ITEMS[here.id].maxStack or 1) > 1) then
         local max = ITEMS[here.id].maxStack
         local total = (here.count or 1) + (moving.count or 1)
-        here.count = math.min(total, max)
-        if total > max then moving.count = total - max else fx.items[fs] = nil end
+        destAfter = { id = here.id, count = math.min(total, max) }
+        srcAfter = total > max and { id = moving.id, count = total - max } or nil
     else
-        x.items[s], fx.items[fs] = moving, here
+        destAfter = { id = moving.id, count = moving.count, bound = moving.bound }
+        srcAfter = here and { id = here.id, count = here.count, bound = here.bound } or nil
     end
-    lock(x, s)
-    lock(fx, fs)
+    setLock(x, s, true, b)
+    setLock(fx, fs, true, fb)
+    local function apply(bx, bs, bb, after)
+        if after then after.locked = bx.items[bs] and bx.items[bs].locked or nil end
+        bx.items[bs] = after
+        M.fire("BAG_UPDATE", bb)
+    end
+    schedule(MOVE_UNLOCK, function() setLock(x, s, false, b) setLock(fx, fs, false, fb) end)
+    schedule(MOVE_CONFIRM, function() apply(x, s, b, destAfter) end)
+    schedule(MOVE_CONFIRM + MOVE_SKEW, function()
+        apply(fx, fs, fb, srcAfter)
+        M.fire("BAG_UPDATE_DELAYED")
+    end)
 end
 
 function ClearCursor() M.cursor = nil end
