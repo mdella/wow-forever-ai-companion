@@ -5,10 +5,11 @@
 
 local ADDON_NAME, ns = ...
 ns = type(ns) == "table" and ns or {}
-local VERSION = "0.10.2"
+local VERSION = "0.10.3"
 local PREFIX = "|cff66ccffAI Companion|r: "
 
 local DB            -- AICompanionDB once loaded
+local note          -- note(what): remember the add-on's last action (defined with say below)
 local charKey       -- "Name@Realm"
 local lastSnapshotAt = 0
 local dirty, pending = false, false
@@ -702,6 +703,7 @@ local function takeSnapshot(reason)
         DB.lastSkipped = { atText = date("%Y-%m-%d %H:%M:%S"), reason = reason, why = "character data not loaded" }
         return nil
     end
+    if note then note("snapshot (" .. tostring(reason) .. ")") end
     local store = charStore()
     local old = store.snapshot
     local snap = {
@@ -1021,6 +1023,11 @@ end
 
 local function say(msg) print(PREFIX .. msg) end
 
+-- What the add-on did last, kept so a blocked action can be traced from the saved file.
+local lastAction = "nothing yet"
+note = function(what) lastAction = tostring(what) .. " at " .. date("%H:%M:%S") end
+
+
 
 -------------------------------------------------------------------------------
 -- Auction house price checks
@@ -1226,26 +1233,38 @@ local function ahStart()
     ahNext()
 end
 
+-- The "check prices" button: the add-on's own frame on UIParent, placed under the auction
+-- window's bottom right by reading the window's position. It is not a child of, anchored to,
+-- or written onto the game's auction window, so it cannot taint buying or bidding.
 local ahButton
+local function placeAhButton()
+    local w = AuctionHouseFrame or AuctionFrame
+    local right, bottom = w and w:GetRight(), w and w:GetBottom()
+    if not (right and bottom) then ahButton:Hide() return end
+    local scale = (w:GetEffectiveScale() or 1) / (UIParent:GetEffectiveScale() or 1)
+    ahButton:ClearAllPoints()
+    ahButton:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", right * scale - 4, bottom * scale - 4)
+    ahButton:Show()
+end
+
 local function ahShow()
-    if ahButton then ahButton:Show() return end
-    local parent = AuctionHouseFrame or AuctionFrame
-    if not parent then return end
     local ok, err = pcall(function()
-        local b = CreateFrame("Button", "AICompanionAuctionButton", parent, "UIPanelButtonTemplate")
-        b:SetSize(230, 24)
-        -- The Buy / Sell / Auctions tabs hang below the left of the window, so sit at the bottom right.
-        b:SetPoint("TOPRIGHT", parent, "BOTTOMRIGHT", -4, -4)
-        b:SetFrameStrata("HIGH")
-        b:SetText("AI Companion: check prices")
-        b:SetScript("OnClick", function() local okStart, e = pcall(ahStart) if not okStart then say("auction check failed: " .. tostring(e)) end end)
-        ahButton = b
+        if not ahButton then
+            local b = CreateFrame("Button", "AICompanionAuctionButton", UIParent, "UIPanelButtonTemplate")
+            b:SetSize(230, 24)
+            b:SetFrameStrata("HIGH")
+            b:SetText("AI Companion: check prices")
+            b:SetScript("OnClick", function() local okStart, e = pcall(ahStart) if not okStart then say("auction check failed: " .. tostring(e)) end end)
+            ahButton = b
+        end
+        placeAhButton()
     end)
     if not ok and DB then DB.lastEventError = "auction button: " .. tostring(err) end
     say("auction house open. Click 'AI Companion: check prices' below the right corner of the window, or type /aic ah.")
 end
 
 local function ahClosed()
+    if ahButton then ahButton:Hide() end
     if ah.running then ahFinish("stopped early because the window closed") end
 end
 
@@ -1521,6 +1540,7 @@ sortStep = function()
             end
             if not j then return sortStop("bag sort stopped: lost track of an item. Nothing was lost; sort again.", itemLabel(want[i])) end
             -- model[i] and model[j] differ, so this is a move or a swap, never a stack merge
+            note(("sort: moving %s to %s"):format(itemLabel(model[j]), slotLabel(slots[i])))
             try(C_Container.PickupContainerItem, slots[j].bag, slots[j].slot)
             try(C_Container.PickupContainerItem, slots[i].bag, slots[i].slot)
             if not sorter.running then return end   -- the game forbade the move
@@ -1537,69 +1557,47 @@ sortStep = function()
     say(("bags sorted by advice in %d moves: sell, auction, mail, bank, use, craft, quest, keep, then the rest."):format(sorter.moves))
 end
 
--- The "Sort by advice" button, on the combined bag window and on the backpack's window.
--- Bag windows can be created after login, so this runs again whenever bags are opened.
-local sortButtons = {}
+-- The "Sort by advice" button. It is the add-on's own frame on UIParent, never a child of,
+-- anchored to, or written onto the game's bag windows: touching those taints the bag item
+-- buttons, and the game then blocks using an item from the bags (issue #15). It follows the
+-- bag window by reading its position a few times a second, and nothing runs when bags open.
+local sortButton, followTicker, followed
+local BAG_WINDOWS = { "ContainerFrameCombinedBags", "ContainerFrame1" }
 
-local function frameName(f)
-    local n = type(f.GetName) == "function" and f:GetName() or nil
-    return type(n) == "string" and n or "unnamed frame"
-end
-
-local function bagFrames()
-    local found, seen = {}, {}
-    local function add(f, how)
-        if type(f) == "table" and not seen[f] then seen[f] = true found[#found + 1] = { frame = f, how = how } end
+local function openBagWindow()
+    for _, name in ipairs(BAG_WINDOWS) do
+        local f = _G[name]
+        if type(f) == "table" and type(f.IsShown) == "function" and f:IsShown() then return f, name end
     end
-    if type(ContainerFrameUtil_EnumerateContainerFrames) == "function" then
-        pcall(function()
-            for _, f in ContainerFrameUtil_EnumerateContainerFrames() do add(f, "enumerated") end
-        end)
+end
+
+local function placeSortButton()
+    if not sortButton then return end
+    local f, name = openBagWindow()
+    local right, top = f and f:GetRight(), f and f:GetTop()
+    if not (right and top) then
+        if sortButton:IsShown() then sortButton:Hide() end
+        followed = nil
+        return
     end
-    add(_G.ContainerFrameCombinedBags, "by name")
-    add(_G.ContainerFrame1, "by name")
-    return found
+    local scale = (f:GetEffectiveScale() or 1) / (UIParent:GetEffectiveScale() or 1)
+    sortButton:ClearAllPoints()
+    sortButton:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMLEFT", right * scale - 4, top * scale + 2)
+    if not sortButton:IsShown() then sortButton:Show() end
+    if followed ~= name then followed = name note("sort button over " .. name) end
 end
 
-local function wantsButton(f)
-    local name = frameName(f)
-    if name == "ContainerFrameCombinedBags" or name == "ContainerFrame1" then return true end
-    local id = type(f.GetID) == "function" and f:GetID() or nil
-    return id == 0   -- the backpack's window
-end
-
-local function addSortButton(parent)
-    if sortButtons[parent] then return end
-    local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+local function makeSortButton()
+    if sortButton then return end
+    local b = CreateFrame("Button", "AICompanionSortButton", UIParent, "UIPanelButtonTemplate")
     b:SetSize(120, 20)
-    b:SetPoint("BOTTOMRIGHT", parent, "TOPRIGHT", -4, 2)
     b:SetFrameStrata("HIGH")
     b:SetText("Sort by advice")
     b:SetScript("OnClick", function() local ok, e = pcall(sortStart) if not ok then say("bag sort failed: " .. tostring(e)) end end)
-    sortButtons[parent] = b
-end
-
-local function hookBagWindows()
-    if not DB then return end
-    local d = sortDebug()
-    d.frames, d.buttons = {}, {}
-    for _, e in ipairs(bagFrames()) do
-        local name = frameName(e.frame)
-        d.frames[#d.frames + 1] = name .. " (" .. e.how .. ")"
-        if wantsButton(e.frame) then
-            local ok, err = pcall(addSortButton, e.frame)
-            d.buttons[#d.buttons + 1] = name .. (ok and "" or (": " .. tostring(err)))
-        end
-    end
-    d.checkedAtText = date("%Y-%m-%d %H:%M:%S")
-end
-
-local bagHooksDone = false
-local function hookBagOpening()
-    if bagHooksDone or type(hooksecurefunc) ~= "function" then return end
-    bagHooksDone = true
-    for _, fn in ipairs({ "OpenAllBags", "ToggleAllBags", "OpenBackpack", "ToggleBackpack", "ToggleBag" }) do
-        if type(_G[fn]) == "function" then pcall(hooksecurefunc, fn, function() pcall(hookBagWindows) end) end
+    b:Hide()
+    sortButton = b
+    if C_Timer and C_Timer.NewTicker then
+        followTicker = C_Timer.NewTicker(0.25, function() pcall(placeSortButton) end)
     end
 end
 
@@ -1609,7 +1607,6 @@ sortStart = function()
     if sorter.running then say("already sorting your bags.") return end
     if not (C_Container and C_Container.PickupContainerItem) then say("this client does not let add-ons move items.") return end
     if try(CursorHasItem) then say("put down the item on your cursor first, then sort again.") return end
-    pcall(hookBagWindows)
     takeSnapshot("sort")
     local slots = sortSlots()
     local model = {}
@@ -1623,10 +1620,20 @@ sortStart = function()
 end
 
 local function sortDebugReport()
-    pcall(hookBagWindows)
     local d = sortDebug()
-    say("bag windows found: " .. (#(d.frames or {}) > 0 and table.concat(d.frames, ", ") or "none"))
-    say("sort button on: " .. (#(d.buttons or {}) > 0 and table.concat(d.buttons, ", ") or "none"))
+    local found = {}
+    for _, name in ipairs(BAG_WINDOWS) do
+        local f = _G[name]
+        if type(f) == "table" then found[#found + 1] = name .. ((type(f.IsShown) == "function" and f:IsShown()) and " (open)" or " (closed)") end
+    end
+    d.bagWindows, d.buttonOver = found, followed
+    say("bag windows: " .. (#found > 0 and table.concat(found, ", ") or "none found"))
+    say("sort button: " .. (followed and ("shown above " .. followed) or "hidden (no bag window open)"))
+    local blocked = DB.blockedActions
+    if type(blocked) == "table" and #blocked > 0 then
+        local b = blocked[#blocked]
+        say(("last blocked action %s: %s (%s), add-on was doing: %s"):format(tostring(b.atText), tostring(b.func), tostring(b.event), tostring(b.lastAction)))
+    end
     local st = d.lastStop
     if type(st) == "table" then say("last stop " .. tostring(st.atText) .. ": " .. tostring(st.message) .. (st.detail and (" (" .. st.detail .. ")") or "")) end
     local run = d.lastRun
@@ -1741,8 +1748,7 @@ end
 
 function handlers.PLAYER_LOGIN()
     if not DB then return end
-    pcall(hookBagOpening)
-    pcall(hookBagWindows)
+    pcall(makeSortButton)
     local name = UnitName("player") or "Unknown"
     local realm = try(GetRealmName) or "Unknown"
     charKey = name .. "@" .. realm
@@ -1779,9 +1785,27 @@ handlers.MERCHANT_SHOW = function() C_Timer.After(0.5, function() pcall(captureM
 handlers.TAXIMAP_OPENED = function() C_Timer.After(0.5, function() pcall(captureTaxi) end) end
 handlers.TRADE_SKILL_LIST_UPDATE = function() pcall(captureRecipes) end
 handlers.PLAYER_REGEN_DISABLED = function() if sorter.running then sortStop("bag sort stopped: you entered combat. Nothing was lost.") end end
-handlers.ADDON_ACTION_FORBIDDEN = function(addon)
+-- The game blocked or forbade something it blames on this add-on. Keep a record in the saved
+-- file (the last 20) so the cause can be traced, and say so once per session.
+local blockedSaid = false
+local function recordBlocked(event, addon, func)
+    if addon ~= ADDON_NAME or not DB then return end
+    DB.blockedActions = type(DB.blockedActions) == "table" and DB.blockedActions or {}
+    local list = DB.blockedActions
+    list[#list + 1] = { atText = date("%Y-%m-%d %H:%M:%S"), event = event, func = tostring(func),
+                        inCombat = (InCombatLockdown and InCombatLockdown()) == true, lastAction = lastAction,
+                        addonVersion = VERSION }
+    while #list > 20 do table.remove(list, 1) end
+    if not blockedSaid then
+        blockedSaid = true
+        say("the game blocked " .. tostring(func) .. ". Recorded for your companion; type /aic save to send it.")
+    end
+end
+handlers.ADDON_ACTION_FORBIDDEN = function(addon, func)
+    recordBlocked("ADDON_ACTION_FORBIDDEN", addon, func)
     if addon == ADDON_NAME and sorter.running then sortStop("bag sort stopped: the game does not let add-ons move items here.") end
 end
+handlers.ADDON_ACTION_BLOCKED = function(addon, func) recordBlocked("ADDON_ACTION_BLOCKED", addon, func) end
 handlers.AUCTION_HOUSE_SHOW = ahShow
 handlers.AUCTION_HOUSE_CLOSED = ahClosed
 handlers.AUCTION_HOUSE_BROWSE_RESULTS_UPDATED = ahBrowseResults

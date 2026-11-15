@@ -103,6 +103,12 @@ end
 
 local function noop() end
 local Widget = {}
+-- A game frame add-on frames must not hang from or anchor to: any game-owned frame except
+-- UIParent and those marked allowChildren (the minimap, which add-on buttons sit on by design).
+local function isGuarded(f)
+    return type(f) == "table" and rawget(f, "blizzard") == true and rawget(f, "allowChildren") ~= true and f ~= rawget(_G, "UIParent")
+end
+local function isBagWindow(f) return isGuarded(f) end
 -- Unknown methods do nothing; unset fields read as nil through the getters above (rawget).
 Widget.__index = function(_, k) return Widget[k] or noop end
 function Widget:SetScript(name, fn) self.scripts[name] = fn end
@@ -177,8 +183,22 @@ function Widget:SetFrameStrata(s) self.strata = s end
 function Widget:SetVerticalScroll(v) self.scrollY = v end
 function Widget:GetVerticalScroll() return rawget(self, "scrollY") or 0 end
 function Widget:Click() local f = self.scripts.OnClick if f then run("slash", "OnClick", f, self, "LeftButton") end end
-function Widget:SetPoint(...) self.point = { ... } end
+function Widget:SetPoint(...)
+    local args = { ... }
+    if not M.mockBusy then
+        for _, a in ipairs(args) do
+            if isBagWindow(a) then violation("add-on anchored a frame to the game's frame " .. tostring(rawget(a, "name"))) end
+        end
+        if rawget(self, "blizzard") then violation("add-on moved the game's frame " .. tostring(rawget(self, "name"))) end
+    end
+    rawset(self, "point", args)
+end
 function Widget:GetName() return rawget(self, "name") end
+function Widget:GetLeft() local r = rawget(self, "rect") return r and r.left end
+function Widget:GetBottom() local r = rawget(self, "rect") return r and r.bottom end
+function Widget:GetRight() local r = rawget(self, "rect") return r and (r.left + r.width) end
+function Widget:GetTop() local r = rawget(self, "rect") return r and (r.bottom + r.height) end
+function Widget:GetEffectiveScale() return 1 end
 function Widget:SetID(id) self.id = id end
 function Widget:GetID() return self.id or 0 end
 
@@ -188,15 +208,42 @@ function M.widget(kind, name)
     return w
 end
 
+-- Frames the game owns. The real client blocks protected actions (using an item from the bags)
+-- once add-on code has tainted the frames involved. The stand-in cannot model taint, so it
+-- refuses the patterns that cause it: an add-on child of, or anchor on, a bag window, and any
+-- value the add-on writes onto a game-owned frame.
+function M.blizzard(w, isBag)
+    rawset(w, "blizzard", true)
+    rawset(w, "bagWindow", isBag == true)
+    return w
+end
+local MOCK_FIELDS = {}
+for _, k in ipairs({ "kind", "name", "scripts", "events", "shown", "text", "point", "width", "height", "id",
+    "parent", "template", "checked", "enabled", "texture", "value", "min", "max", "scrollY", "scrollChild",
+    "owner", "lines", "rect", "font", "atlas", "mask", "normalTexture", "highlightTexture", "pushedTexture",
+    "maxLines", "strata", "wordWrap" }) do MOCK_FIELDS[k] = true end
+Widget.__newindex = function(t, k, v)
+    if rawget(t, "blizzard") and not M.mockBusy and not MOCK_FIELDS[k] then
+        violation("add-on wrote " .. tostring(k) .. " onto the game's frame " .. tostring(rawget(t, "name")))
+    end
+    rawset(t, k, v)
+end
+
+
 function CreateFrame(kind, name, parent, template)
+    if isBagWindow(parent) and not M.mockBusy then
+        violation("add-on created a frame inside the game's frame " .. tostring(rawget(parent, "name")))
+    end
     local f = M.widget(kind or "Frame", name)
     f.parent, f.template = parent, template
     M.frames[#M.frames + 1] = f
     return f
 end
 
-UIParent = M.widget("Frame", "UIParent")
-Minimap = M.widget("Frame", "Minimap")
+M.mockBusy = true
+UIParent = M.blizzard(M.widget("Frame", "UIParent"))
+Minimap = M.blizzard(M.widget("Frame", "Minimap"))
+rawset(Minimap, "allowChildren", true)   -- minimap buttons sit on the minimap by design
 Minimap:SetSize(140, 140)
 UISpecialFrames = {}
 M.cursorX, M.cursorY = 700, 600
@@ -211,11 +258,12 @@ C_Texture = {
     GetAtlasInfo = function(atlas) if (W.missingFiles or {})[atlas] then return nil end return { width = 32, height = 32 } end,
 }
 
-GameTooltip = M.widget("GameTooltip", "GameTooltip")
+GameTooltip = M.blizzard(M.widget("GameTooltip", "GameTooltip"))
 GameTooltip.shown = false
 function GameTooltip:SetOwner(owner) self.owner, self.lines = owner, {} end
 function GameTooltip:SetText(t) self.lines = { t } end
 function GameTooltip:AddLine(t) self.lines[#self.lines + 1] = t end
+M.mockBusy = false
 
 function M.fire(event, ...)
     for _, f in ipairs(M.frames) do
@@ -253,10 +301,12 @@ end
 function InCombatLockdown() return W.inCombat == true end
 
 -- hooksecurefunc(name, fn) or hooksecurefunc(table, name, fn): run fn after the original.
+M.hooks = {}
 function hooksecurefunc(a, b, c)
     local t, name, fn = _G, a, b
     if type(a) == "table" then t, name, fn = a, b, c end
     local orig = t[name]
+    M.hooks[#M.hooks + 1] = tostring(name)
     t[name] = function(...) local r = { orig(...) } fn(...) return unpack(r) end
 end
 
@@ -265,16 +315,20 @@ end
 M.bagWindows = {}
 local function makeBagWindows()
     if #M.bagWindows > 0 then return end
-    local combined = M.widget("Frame", "ContainerFrameCombinedBags")
+    M.mockBusy = true
+    local combined = M.blizzard(M.widget("Frame", "ContainerFrameCombinedBags"), true)
     combined:SetID(0)
     combined.shown = false
+    combined.rect = { left = 1180, bottom = 120, width = 420, height = 480 }   -- screen position, in UI units
     M.bagWindows[1] = combined
     for i = 1, 6 do
-        local f = M.widget("Frame", "ContainerFrame" .. i)
+        local f = M.blizzard(M.widget("Frame", "ContainerFrame" .. i), true)
         f:SetID(i - 1)
         f.shown = false
+        f.rect = { left = 1400, bottom = 120 + (i - 1) * 200, width = 200, height = 190 }
         M.bagWindows[#M.bagWindows + 1] = f
     end
+    M.mockBusy = false
 end
 if W.bagFrames == "login" then makeBagWindows() end
 function ContainerFrameUtil_EnumerateContainerFrames() return ipairs(M.bagWindows) end
@@ -658,11 +712,18 @@ end
 
 function M.openAuction()
     W.auctionOpen = true
-    AuctionHouseFrame = AuctionHouseFrame or M.widget("Frame", "AuctionHouseFrame")
+    if not AuctionHouseFrame then
+        M.mockBusy = true
+        AuctionHouseFrame = M.blizzard(M.widget("Frame", "AuctionHouseFrame"))
+        AuctionHouseFrame.rect = { left = 300, bottom = 200, width = 800, height = 540 }
+        M.mockBusy = false
+    end
+    AuctionHouseFrame.shown = true
     M.fire("AUCTION_HOUSE_SHOW")
 end
 function M.closeAuction()
     W.auctionOpen = false
+    if AuctionHouseFrame then rawset(AuctionHouseFrame, "shown", false) end
     M.fire("AUCTION_HOUSE_CLOSED")
 end
 
