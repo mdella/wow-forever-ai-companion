@@ -103,6 +103,12 @@ end
 
 local function noop() end
 local Widget = {}
+-- A game frame add-on frames must not hang from or anchor to: any game-owned frame except
+-- UIParent and those marked allowChildren (the minimap, which add-on buttons sit on by design).
+local function isGuarded(f)
+    return type(f) == "table" and rawget(f, "blizzard") == true and rawget(f, "allowChildren") ~= true and f ~= rawget(_G, "UIParent")
+end
+local function isBagWindow(f) return isGuarded(f) end
 Widget.__index = function(_, k) return Widget[k] or noop end
 function Widget:SetScript(name, fn) self.scripts[name] = fn end
 function Widget:GetScript(name) return self.scripts[name] end
@@ -121,6 +127,24 @@ function Widget:IsShown() return self.shown == true end
 function Widget:CreateFontString() return M.widget("FontString") end
 function Widget:CreateTexture() return M.widget("Texture") end
 function Widget:Click() local f = self.scripts.OnClick if f then run("slash", "OnClick", f, self, "LeftButton") end end
+function Widget:SetPoint(...)
+    local args = { ... }
+    if not M.mockBusy then
+        for _, a in ipairs(args) do
+            if isBagWindow(a) then violation("add-on anchored a frame to the game's frame " .. tostring(rawget(a, "name"))) end
+        end
+        if rawget(self, "blizzard") then violation("add-on moved the game's frame " .. tostring(rawget(self, "name"))) end
+    end
+    rawset(self, "point", args)
+end
+function Widget:GetName() return self.name end
+function Widget:GetLeft() local r = rawget(self, "rect") return r and r.left end
+function Widget:GetBottom() local r = rawget(self, "rect") return r and r.bottom end
+function Widget:GetRight() local r = rawget(self, "rect") return r and (r.left + r.width) end
+function Widget:GetTop() local r = rawget(self, "rect") return r and (r.bottom + r.height) end
+function Widget:GetEffectiveScale() return 1 end
+function Widget:SetID(id) self.id = id end
+function Widget:GetID() return self.id or 0 end
 
 function M.widget(kind, name)
     local w = setmetatable({ kind = kind, name = name, scripts = {}, events = {}, shown = true }, Widget)
@@ -128,14 +152,38 @@ function M.widget(kind, name)
     return w
 end
 
+-- Frames the game owns. The real client blocks protected actions (using an item from the bags)
+-- once add-on code has tainted the frames involved. The stand-in cannot model taint, so it
+-- refuses the patterns that cause it: an add-on child of, or anchor on, a bag window, and any
+-- value the add-on writes onto a game-owned frame.
+function M.blizzard(w, isBag)
+    rawset(w, "blizzard", true)
+    rawset(w, "bagWindow", isBag == true)
+    return w
+end
+local MOCK_FIELDS = {}
+for _, k in ipairs({ "kind", "name", "scripts", "events", "shown", "text", "point", "width", "height", "id",
+    "parent", "template", "checked", "enabled", "texture", "value", "min", "max", "scrollY", "scrollChild",
+    "owner", "lines", "rect" }) do MOCK_FIELDS[k] = true end
+Widget.__newindex = function(t, k, v)
+    if rawget(t, "blizzard") and not M.mockBusy and not MOCK_FIELDS[k] then
+        violation("add-on wrote " .. tostring(k) .. " onto the game's frame " .. tostring(rawget(t, "name")))
+    end
+    rawset(t, k, v)
+end
+
+
 function CreateFrame(kind, name, parent, template)
+    if isBagWindow(parent) and not M.mockBusy then
+        violation("add-on created a frame inside the game's frame " .. tostring(rawget(parent, "name")))
+    end
     local f = M.widget(kind or "Frame", name)
     f.parent, f.template = parent, template
     M.frames[#M.frames + 1] = f
     return f
 end
 
-UIParent = M.widget("Frame", "UIParent")
+UIParent = M.blizzard(M.widget("Frame", "UIParent"))
 
 function M.fire(event, ...)
     for _, f in ipairs(M.frames) do
@@ -171,6 +219,41 @@ function ReloadUI()
 end
 
 function InCombatLockdown() return W.inCombat == true end
+
+-- hooksecurefunc(name, fn) or hooksecurefunc(table, name, fn): run fn after the original.
+M.hooks = {}
+function hooksecurefunc(a, b, c)
+    local t, name, fn = _G, a, b
+    if type(a) == "table" then t, name, fn = a, b, c end
+    local orig = t[name]
+    M.hooks[#M.hooks + 1] = tostring(name)
+    t[name] = function(...) local r = { orig(...) } fn(...) return unpack(r) end
+end
+
+-- Bag windows. W.bagFrames: nil (none), "login" (exist when add-ons load) or "late" (made
+-- the first time the bags are opened, as a client may do).
+M.bagWindows = {}
+local function makeBagWindows()
+    if #M.bagWindows > 0 then return end
+    M.mockBusy = true
+    local combined = M.blizzard(M.widget("Frame", "ContainerFrameCombinedBags"), true)
+    combined:SetID(0)
+    combined.shown = false
+    combined.rect = { left = 1180, bottom = 120, width = 420, height = 480 }   -- screen position, in UI units
+    M.bagWindows[1] = combined
+    for i = 1, 6 do
+        local f = M.blizzard(M.widget("Frame", "ContainerFrame" .. i), true)
+        f:SetID(i - 1)
+        f.shown = false
+        f.rect = { left = 1400, bottom = 120 + (i - 1) * 200, width = 200, height = 190 }
+        M.bagWindows[#M.bagWindows + 1] = f
+    end
+    M.mockBusy = false
+end
+if W.bagFrames == "login" then makeBagWindows() end
+function ContainerFrameUtil_EnumerateContainerFrames() return ipairs(M.bagWindows) end
+function OpenAllBags() makeBagWindows() M.bagWindows[1]:Show() end
+function ToggleAllBags() makeBagWindows() local f = M.bagWindows[1] if f.shown then f:Hide() else f:Show() end end
 
 -- Values the client hides from add-ons. Only defined when a test lists some, like a client
 -- without the feature.
@@ -301,7 +384,7 @@ function C_Container.GetContainerNumFreeSlots(b)
     if not x then return 0, 0 end
     local used = 0
     for s = 1, x.slots do if x.items and x.items[s] then used = used + 1 end end
-    return x.slots - used, 0
+    return x.slots - used, x.family or 0
 end
 function C_Container.GetContainerItemInfo(b, s)
     local x = bag(b)
@@ -311,6 +394,7 @@ function C_Container.GetContainerItemInfo(b, s)
     return {
         hyperlink = M.link(slot.id), stackCount = slot.count or 1, itemID = slot.id, itemName = it.name,
         isBound = slot.bound == true, hasNoValue = (it.sellPrice or 0) == 0, quality = it.quality,
+        isLocked = slot.locked == true,
     }
 end
 
@@ -330,6 +414,96 @@ C_TooltipInfo = {
     end,
     GetInventoryItem = function(unit, slot) return EQUIP[slot] and tooltipData(EQUIP[slot]) end,
 }
+
+
+-------------------------------------------------------------------------------
+-- Cursor and item moves, as the client does them:
+-- picking up an item and putting it on an empty slot moves it; on a different item, swaps;
+-- on the same stackable item, merges the stacks. A special bag (family ~= 0) only takes items
+-- of its kind.
+-- Like the real client, a move is not applied at once. Both slots lock straight away; the
+-- server confirms later. Each slot's contents change at its own moment (moveConfirm, plus
+-- moveSkew for the second slot), and the locks clear at moveUnlock, which may be before the
+-- contents change. Events: ITEM_LOCK_CHANGED on each lock change, BAG_UPDATE per slot, then
+-- BAG_UPDATE_DELAYED.
+-------------------------------------------------------------------------------
+
+local MOVE_CONFIRM = W.moveConfirm or 0.25
+local MOVE_SKEW = W.moveSkew or 0.1
+local MOVE_UNLOCK = W.moveUnlock or 0.15
+M.cursor = nil
+M.moves = 0
+
+local function slotRef(b, s)
+    local x = bag(b)
+    if not x or s < 1 or s > x.slots then return nil end
+    x.items = x.items or {}
+    return x
+end
+
+local function setLock(x, s, on, b)
+    local it = x.items[s]
+    if it then it.locked = on or nil end
+    M.fire("ITEM_LOCK_CHANGED", b, s)
+end
+
+C_Container.PickupContainerItem = function(b, s)
+    if InCombatLockdown() then violation("item moved in combat") end
+    if W.forbidMoves then M.fire("ADDON_ACTION_FORBIDDEN", "AICompanion", "PickupContainerItem()") return end
+    local x = slotRef(b, s)
+    if not x then return end
+    local here = x.items[s]
+    if here and here.locked then violation("picked up a locked item at " .. b .. "/" .. s) return end
+    if not M.cursor then
+        if here then M.cursor = { bag = b, slot = s, x = x } end
+        return
+    end
+    if W.refusePlace then return end   -- the client keeps the item on the cursor
+    local from = M.cursor
+    local fx, fs, fb = from.x, from.slot, from.bag
+    local moving = fx.items[fs]
+    M.cursor = nil
+    if fx == x and fs == s then return end
+    if (x.family or 0) ~= 0 and not (ITEMS[moving.id] and ITEMS[moving.id].family == x.family) then
+        violation("put an item into a special bag that does not take it") M.cursor = from return
+    end
+    if here and (fx.family or 0) ~= 0 and not (ITEMS[here.id] and ITEMS[here.id].family == fx.family) then
+        violation("swapped an item into a special bag that does not take it") M.cursor = from return
+    end
+    M.moves = M.moves + 1
+    -- what each slot will hold once the server confirms
+    local destAfter, srcAfter
+    if here and here.id == moving.id and (ITEMS[here.id] and (ITEMS[here.id].maxStack or 1) > 1) then
+        local max = ITEMS[here.id].maxStack
+        local total = (here.count or 1) + (moving.count or 1)
+        destAfter = { id = here.id, count = math.min(total, max) }
+        srcAfter = total > max and { id = moving.id, count = total - max } or nil
+    else
+        destAfter = { id = moving.id, count = moving.count, bound = moving.bound }
+        srcAfter = here and { id = here.id, count = here.count, bound = here.bound } or nil
+    end
+    setLock(x, s, true, b)
+    setLock(fx, fs, true, fb)
+    local function apply(bx, bs, bb, after)
+        if after then after.locked = bx.items[bs] and bx.items[bs].locked or nil end
+        bx.items[bs] = after
+        M.fire("BAG_UPDATE", bb)
+    end
+    schedule(MOVE_UNLOCK, function() setLock(x, s, false, b) setLock(fx, fs, false, fb) end)
+    schedule(MOVE_CONFIRM, function() apply(x, s, b, destAfter) end)
+    schedule(MOVE_CONFIRM + MOVE_SKEW, function()
+        apply(fx, fs, fb, srcAfter)
+        M.fire("BAG_UPDATE_DELAYED")
+    end)
+end
+
+function ClearCursor() M.cursor = nil end
+function CursorHasItem() return M.cursor ~= nil end
+function GetCursorInfo()
+    if not M.cursor then return nil end
+    local it = M.cursor.x.items[M.cursor.slot]
+    return "item", it and it.id, it and M.link(it.id)
+end
 
 -------------------------------------------------------------------------------
 -- Quests
@@ -379,10 +553,11 @@ Enum = {
     TooltipDataType = { Item = 0, Spell = 1, Unit = 2 },
     SpellBookSpellBank = { Player = 0, Pet = 1 },
     AuctionHouseSortOrder = { Price = 0, Name = 1, Level = 2, Bid = 3, Buyout = 4 },
+    -- Values as the Forever client has them (tests/forever/api_names.json).
     AuctionHouseFilter = {
-        None = 0, UncollectedOnly = 1, UsableOnly = 2, UpgradesOnly = 3, ExactMatch = 4,
-        PoorQuality = 5, CommonQuality = 6, UncommonQuality = 7, RareQuality = 8, EpicQuality = 9,
-        LegendaryQuality = 10, ArtifactQuality = 11,
+        None = 0, UncollectedOnly = 1, UsableOnly = 2, CurrentExpansionOnly = 3, UpgradesOnly = 4, ExactMatch = 5,
+        PoorQuality = 6, CommonQuality = 7, UncommonQuality = 8, RareQuality = 9, EpicQuality = 10,
+        LegendaryQuality = 11, ArtifactQuality = 12, LegendaryCraftedItemOnly = 13,
     },
 }
 
@@ -457,11 +632,18 @@ end
 
 function M.openAuction()
     W.auctionOpen = true
-    AuctionHouseFrame = AuctionHouseFrame or M.widget("Frame", "AuctionHouseFrame")
+    if not AuctionHouseFrame then
+        M.mockBusy = true
+        AuctionHouseFrame = M.blizzard(M.widget("Frame", "AuctionHouseFrame"))
+        AuctionHouseFrame.rect = { left = 300, bottom = 200, width = 800, height = 540 }
+        M.mockBusy = false
+    end
+    AuctionHouseFrame.shown = true
     M.fire("AUCTION_HOUSE_SHOW")
 end
 function M.closeAuction()
     W.auctionOpen = false
+    if AuctionHouseFrame then rawset(AuctionHouseFrame, "shown", false) end
     M.fire("AUCTION_HOUSE_CLOSED")
 end
 
