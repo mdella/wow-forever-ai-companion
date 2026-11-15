@@ -5,6 +5,7 @@ This is the AI Companion add-on for **World of Warcraft: Forever** and the tools
 ## Rules
 
 1. **Forever only.** Client interface 16001. The client uses the modern (Mainline-style) add-on API: `C_Container`, `C_Traits`, `C_AuctionHouse`, `C_TooltipInfo`, `TooltipDataProcessor`. Do not assume a Classic or retail API exists; guard every game call with `pcall` (the `try` helper) and degrade to no output.
+   - **Check a function exists before using it** in `tests/forever/api_names.json`: every function, event and key enum an in-game dump of the real client found, from the [ForeverAPI](https://github.com/zmarotrix/ForeverAPI) project (MIT). `tests/test_forever_api.py` fails if the add-on or the stand-in client uses a name Forever lacks. The dump proves a function exists, not how it behaves; behaviour is confirmed only in the real game. Fuller references: ForeverAPI's `docs/` (signatures, per-system pages) and ForeverPlusPlus `docs/forever-api.md` (in-game behaviour notes, including secret values). Refresh the name list after a game patch.
 2. **No personal data in the repository.** No character names, account names or numbers, SavedVariables files, or plan files. `AddOns/AICompanion_Data/AICompanion_Data.lua` ships with empty tables.
 3. **Version in two places.** `## Version:` in `AddOns/AICompanion/AICompanion.toc` and `local VERSION` in `AICompanion.lua` must match. Bump both on every change to the add-on.
 4. **Tooltips stay short.** At most three added lines; advice text at most 48 characters.
@@ -36,6 +37,5 @@ This is the AI Companion add-on for **World of Warcraft: Forever** and the tools
 
 ## Open items
 
-- Capture recipe ingredients when a profession window is opened, so rules can say "Craft now".
-- Bag sorting by recommended action (needs confirmation that Forever exposes item moves to add-ons).
+- Capture recipe ingredients when a profession window is opened, so rules can say "Craft now". `C_TradeSkillUI.GetRecipeSchematic` exists in Forever.
 - Dashboard: use rule advice for items the plan does not cover.

@@ -379,10 +379,11 @@ Enum = {
     TooltipDataType = { Item = 0, Spell = 1, Unit = 2 },
     SpellBookSpellBank = { Player = 0, Pet = 1 },
     AuctionHouseSortOrder = { Price = 0, Name = 1, Level = 2, Bid = 3, Buyout = 4 },
+    -- Values as the Forever client has them (tests/forever/api_names.json).
     AuctionHouseFilter = {
-        None = 0, UncollectedOnly = 1, UsableOnly = 2, UpgradesOnly = 3, ExactMatch = 4,
-        PoorQuality = 5, CommonQuality = 6, UncommonQuality = 7, RareQuality = 8, EpicQuality = 9,
-        LegendaryQuality = 10, ArtifactQuality = 11,
+        None = 0, UncollectedOnly = 1, UsableOnly = 2, CurrentExpansionOnly = 3, UpgradesOnly = 4, ExactMatch = 5,
+        PoorQuality = 6, CommonQuality = 7, UncommonQuality = 8, RareQuality = 9, EpicQuality = 10,
+        LegendaryQuality = 11, ArtifactQuality = 12, LegendaryCraftedItemOnly = 13,
     },
 }
 
