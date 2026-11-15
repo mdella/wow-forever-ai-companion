@@ -1387,6 +1387,7 @@ end
 
 local SORT_GROUP = { sell = 1, auction = 2, mail = 3, bank = 4, use = 5, craft = 6, quest = 7, carry = 8, keep = 8 }
 local sorter = { running = false }
+local sortStep, sortStart   -- defined below; declared first because they and the bag button refer to each other
 
 local function sortSlots()
     local slots = {}
@@ -1429,27 +1430,80 @@ local function sortTarget(slots)
     return want
 end
 
-local function sortStop(message)
-    sorter.running = false
-    if try(CursorHasItem) then try(ClearCursor) end   -- puts a held item back where it came from
-    say(message)
+local function itemLabel(id)
+    if not id then return "empty" end
+    local n = C_Item and try(C_Item.GetItemNameByID, id)
+    if type(n) == "string" and not isSecret(n) then return n end
+    return "item " .. tostring(id)
 end
 
-local sortStep
+local function slotLabel(p) return ("bag %d slot %d"):format(p.bag, p.slot) end
+
+local function sortDebug()
+    DB.sortDebug = type(DB.sortDebug) == "table" and DB.sortDebug or {}
+    return DB.sortDebug
+end
+
+local function sortStop(message, detail)
+    sorter.running = false
+    if try(CursorHasItem) then try(ClearCursor) end   -- puts a held item back where it came from
+    sortDebug().lastStop = { atText = date("%Y-%m-%d %H:%M:%S"), message = message, detail = detail, moves = sorter.moves }
+    say(message .. (detail and (" (" .. detail .. ")") or ""))
+end
+
+local SORT_TICK, SORT_GRACE, SORT_CONFIRM_TIMEOUT = 0.1, 10, 5
+
+local function sortLater() C_Timer.After(SORT_TICK, sortStep) end
+
+-- A move is pending from the moment it is made until both of its slots show their new
+-- contents and are unlocked. Until then each of the two slots may read as before or after
+-- the move: the server confirms them separately. Any other difference is a real change, and
+-- gets SORT_GRACE re-reads (about a second) before the sort gives up.
 sortStep = function()
     if not sorter.running then return end
     if InCombatLockdown and InCombatLockdown() then return sortStop("bag sort stopped: you entered combat. Nothing was lost.") end
+    local slots, model, want, pend = sorter.slots, sorter.model, sorter.want, sorter.pending
     if try(CursorHasItem) then return sortStop("bag sort stopped: something is on your cursor. Nothing was lost.") end
-    local slots, model, want = sorter.slots, sorter.model, sorter.want
+    local now = GetTime()
+    local read, anyLocked, mismatch = {}, false, nil
     for i, p in ipairs(slots) do
         local id, locked = slotItem(p)
-        if locked then
-            sorter.waits = sorter.waits + 1
-            if sorter.waits > 50 then return sortStop("bag sort stopped: the game did not confirm a move. Nothing was lost.") end
-            C_Timer.After(0.1, sortStep)
-            return
+        read[i] = { id = id, locked = locked }
+        if locked then anyLocked = true end
+        local ok
+        if pend and (i == pend.i or i == pend.j) then
+            -- written out: "x and a or b" picks b when a is false (an empty slot)
+            local before, after
+            if i == pend.i then before, after = pend.oldI, pend.oldJ else before, after = pend.oldJ, pend.oldI end
+            ok = id == before or id == after
+        else
+            ok = id == model[i]
         end
-        if id ~= model[i] then return sortStop("bag sort stopped: your bags changed while sorting. Nothing was lost; sort again.") end
+        if not ok and not mismatch then mismatch = { p = p, expected = model[i], found = id } end
+    end
+    if mismatch then
+        sorter.grace = sorter.grace + 1
+        if sorter.grace <= SORT_GRACE then return sortLater() end
+        return sortStop("bag sort stopped: your bags changed while sorting. Nothing was lost; sort again.",
+            ("%s: expected %s, found %s"):format(slotLabel(mismatch.p), itemLabel(mismatch.expected), itemLabel(mismatch.found)))
+    end
+    sorter.grace = 0
+    if pend then
+        local ri, rj = read[pend.i], read[pend.j]
+        if not (ri.id == pend.oldJ and rj.id == pend.oldI and not ri.locked and not rj.locked) then
+            if now - pend.at > SORT_CONFIRM_TIMEOUT then
+                return sortStop("bag sort stopped: the game did not confirm a move. Nothing was lost.",
+                    ("%s to %s"):format(itemLabel(pend.oldJ), slotLabel(slots[pend.i])))
+            end
+            return sortLater()
+        end
+        model[pend.i], model[pend.j] = pend.oldJ, pend.oldI
+        sorter.pending, sorter.moves, sorter.pos = nil, sorter.moves + 1, pend.i + 1
+    end
+    if anyLocked then
+        sorter.waits = sorter.waits + 1
+        if sorter.waits * SORT_TICK > SORT_CONFIRM_TIMEOUT then return sortStop("bag sort stopped: an item stayed locked. Nothing was lost.") end
+        return sortLater()
     end
     sorter.waits = 0
     for i = sorter.pos, #slots do
@@ -1465,28 +1519,97 @@ sortStep = function()
                     if model[k] == want[i] then j = k break end
                 end
             end
-            if not j then return sortStop("bag sort stopped: lost track of an item. Nothing was lost; sort again.") end
+            if not j then return sortStop("bag sort stopped: lost track of an item. Nothing was lost; sort again.", itemLabel(want[i])) end
             -- model[i] and model[j] differ, so this is a move or a swap, never a stack merge
             try(C_Container.PickupContainerItem, slots[j].bag, slots[j].slot)
             try(C_Container.PickupContainerItem, slots[i].bag, slots[i].slot)
             if not sorter.running then return end   -- the game forbade the move
-            if try(CursorHasItem) then return sortStop("bag sort stopped: the game refused a move. Nothing was lost.") end
-            model[i], model[j] = model[j], model[i]
-            sorter.moves, sorter.pos = sorter.moves + 1, i + 1
-            C_Timer.After(0.1, sortStep)
-            return
+            if try(CursorHasItem) then
+                return sortStop("bag sort stopped: the game refused a move. Nothing was lost.",
+                    ("%s to %s"):format(itemLabel(model[j]), slotLabel(slots[i])))
+            end
+            sorter.pending = { i = i, j = j, oldI = model[i], oldJ = model[j], at = now }
+            return sortLater()
         end
     end
     sorter.running = false
+    sortDebug().lastRun = { atText = date("%Y-%m-%d %H:%M:%S"), moves = sorter.moves, slots = #slots }
     say(("bags sorted by advice in %d moves: sell, auction, mail, bank, use, craft, quest, keep, then the rest."):format(sorter.moves))
 end
 
-local function sortStart()
+-- The "Sort by advice" button, on the combined bag window and on the backpack's window.
+-- Bag windows can be created after login, so this runs again whenever bags are opened.
+local sortButtons = {}
+
+local function frameName(f)
+    local n = type(f.GetName) == "function" and f:GetName() or nil
+    return type(n) == "string" and n or "unnamed frame"
+end
+
+local function bagFrames()
+    local found, seen = {}, {}
+    local function add(f, how)
+        if type(f) == "table" and not seen[f] then seen[f] = true found[#found + 1] = { frame = f, how = how } end
+    end
+    if type(ContainerFrameUtil_EnumerateContainerFrames) == "function" then
+        pcall(function()
+            for _, f in ContainerFrameUtil_EnumerateContainerFrames() do add(f, "enumerated") end
+        end)
+    end
+    add(_G.ContainerFrameCombinedBags, "by name")
+    add(_G.ContainerFrame1, "by name")
+    return found
+end
+
+local function wantsButton(f)
+    local name = frameName(f)
+    if name == "ContainerFrameCombinedBags" or name == "ContainerFrame1" then return true end
+    local id = type(f.GetID) == "function" and f:GetID() or nil
+    return id == 0   -- the backpack's window
+end
+
+local function addSortButton(parent)
+    if sortButtons[parent] then return end
+    local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    b:SetSize(120, 20)
+    b:SetPoint("BOTTOMRIGHT", parent, "TOPRIGHT", -4, 2)
+    b:SetFrameStrata("HIGH")
+    b:SetText("Sort by advice")
+    b:SetScript("OnClick", function() local ok, e = pcall(sortStart) if not ok then say("bag sort failed: " .. tostring(e)) end end)
+    sortButtons[parent] = b
+end
+
+local function hookBagWindows()
+    if not DB then return end
+    local d = sortDebug()
+    d.frames, d.buttons = {}, {}
+    for _, e in ipairs(bagFrames()) do
+        local name = frameName(e.frame)
+        d.frames[#d.frames + 1] = name .. " (" .. e.how .. ")"
+        if wantsButton(e.frame) then
+            local ok, err = pcall(addSortButton, e.frame)
+            d.buttons[#d.buttons + 1] = name .. (ok and "" or (": " .. tostring(err)))
+        end
+    end
+    d.checkedAtText = date("%Y-%m-%d %H:%M:%S")
+end
+
+local bagHooksDone = false
+local function hookBagOpening()
+    if bagHooksDone or type(hooksecurefunc) ~= "function" then return end
+    bagHooksDone = true
+    for _, fn in ipairs({ "OpenAllBags", "ToggleAllBags", "OpenBackpack", "ToggleBackpack", "ToggleBag" }) do
+        if type(_G[fn]) == "function" then pcall(hooksecurefunc, fn, function() pcall(hookBagWindows) end) end
+    end
+end
+
+sortStart = function()
     if not DB or not charKey then return end
     if InCombatLockdown and InCombatLockdown() then say("can't sort bags in combat.") return end
     if sorter.running then say("already sorting your bags.") return end
     if not (C_Container and C_Container.PickupContainerItem) then say("this client does not let add-ons move items.") return end
     if try(CursorHasItem) then say("put down the item on your cursor first, then sort again.") return end
+    pcall(hookBagWindows)
     takeSnapshot("sort")
     local slots = sortSlots()
     local model = {}
@@ -1495,27 +1618,20 @@ local function sortStart()
         if locked then say("an item is still moving; try again in a moment.") return end
         model[i] = id
     end
-    sorter = { running = true, slots = slots, model = model, want = sortTarget(slots), pos = 1, moves = 0, waits = 0 }
+    sorter = { running = true, slots = slots, model = model, want = sortTarget(slots), pos = 1, moves = 0, waits = 0, grace = 0 }
     sortStep()
 end
 
--- A button above the bag window. Frame names follow the modern client; if neither exists, /aic sort still works.
-local sortButtons = {}
-local function addSortButton(parent)
-    if not parent or sortButtons[parent] or type(parent.HookScript) ~= "function" then return end
-    local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    b:SetSize(120, 20)
-    b:SetPoint("BOTTOMRIGHT", parent, "TOPRIGHT", -4, 2)
-    b:SetText("Sort by advice")
-    b:SetScript("OnClick", function() local ok, e = pcall(sortStart) if not ok then say("bag sort failed: " .. tostring(e)) end end)
-    sortButtons[parent] = b
-end
-
-local function hookBagWindows()
-    for _, name in ipairs({ "ContainerFrameCombinedBags", "ContainerFrame1" }) do
-        local f = _G[name]
-        if type(f) == "table" then pcall(addSortButton, f) end
-    end
+local function sortDebugReport()
+    pcall(hookBagWindows)
+    local d = sortDebug()
+    say("bag windows found: " .. (#(d.frames or {}) > 0 and table.concat(d.frames, ", ") or "none"))
+    say("sort button on: " .. (#(d.buttons or {}) > 0 and table.concat(d.buttons, ", ") or "none"))
+    local st = d.lastStop
+    if type(st) == "table" then say("last stop " .. tostring(st.atText) .. ": " .. tostring(st.message) .. (st.detail and (" (" .. st.detail .. ")") or "")) end
+    local run = d.lastRun
+    if type(run) == "table" then say("last full sort " .. tostring(run.atText) .. ": " .. tostring(run.moves) .. " moves.") end
+    say("saved for your companion at your next /aic save.")
 end
 
 local function countErrors(snap)
@@ -1561,7 +1677,7 @@ local function handleSlash(msg)
     elseif cmd == "ah" or cmd == "auction" then
         ahStart()
     elseif cmd == "sort" then
-        sortStart()
+        if rest:lower() == "debug" then sortDebugReport() else sortStart() end
     elseif cmd == "panel" then
         if ns.panel and ns.panel.toggle then ns.panel.toggle() else say("the panel is not loaded; restart the game once after updating.") end
     elseif cmd == "probe" then
@@ -1577,6 +1693,7 @@ local function handleSlash(msg)
         print("  /aic ah         at an auctioneer: check prices for your bags, bank and shopping list")
         print("  /aic sort       group your bags by advice: sell, auction, mail, bank, use, craft, quest, keep")
         print("  /aic panel      open or close your companion panel (also the minimap button)")
+        print("  /aic sort debug what the bag sort found, and why it last stopped")
     end
 end
 
@@ -1611,7 +1728,6 @@ function handlers.ADDON_LOADED(name)
     DB.addonVersion = VERSION
     DB.characters = DB.characters or {}
     DB.questions = DB.questions or {}
-    pcall(hookBagWindows)
     local okHook, hookErr = hookTooltips()
     DB.tooltipHook = okHook and "ok" or ("failed: " .. tostring(hookErr))
 end
@@ -1625,6 +1741,8 @@ end
 
 function handlers.PLAYER_LOGIN()
     if not DB then return end
+    pcall(hookBagOpening)
+    pcall(hookBagWindows)
     local name = UnitName("player") or "Unknown"
     local realm = try(GetRealmName) or "Unknown"
     charKey = name .. "@" .. realm
