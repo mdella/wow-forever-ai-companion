@@ -2,6 +2,8 @@
 # a pull request it watches, so this posts a short comment on the open "Companion inbox" draft
 # pull request (branch claude/companion-inbox) whenever an issue is opened or reopened, or the
 # repository owner comments on an issue. The agent then reads the issue itself.
+# The agent posts from the owner's account too; its own comments carry the hidden marker
+# <!-- maintainer-agent --> and are skipped, so it is not woken by itself.
 name: notify companion
 on:
   issues:
@@ -16,7 +18,8 @@ jobs:
   ping:
     if: >-
       github.event_name != 'issue_comment' ||
-      (github.event.issue.pull_request == null && github.event.comment.user.login == github.repository_owner)
+      (github.event.issue.pull_request == null && github.event.comment.user.login == github.repository_owner &&
+       !contains(github.event.comment.body, '<!-- maintainer-agent -->'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
