@@ -11,7 +11,7 @@ This is the AI Companion add-on for **World of Warcraft: Forever** and the tools
 4. **Tooltips stay short.** At most three added lines; advice text at most 48 characters.
 5. **Rules stay silent when unsure.** A rule in `AICompanion_Rules.lua` returns nothing unless the snapshot alone proves the advice. Rules are pure functions over the snapshot so they can be run outside the game.
 6. **Never snapshot at logout.** Character data is already unloaded at `PLAYER_LOGOUT`. Keep the `worldDataReady` guard.
-7. **`ReloadUI()` only directly from a slash command**, never from a timer.
+7. **`ReloadUI()` only directly from the player's own action:** a typed slash command or a click on one of the add-on's buttons. Never from a timer or an event; a timer may only show a reminder that asks the player to reload.
 8. **Auction queries** must set the quality filters or they return nothing, run one name at a time, and respect the throttle.
    - **Auctionator** is optional and used only through its public functions (`Auctionator.API.v1`), each call in `pcall`, with the add-on's name as caller. Never read its saved files. Missing functions or errors count as "no Auctionator": the add-on's own check takes over.
 9. **Never taint the game's frames.** Add-on frames are children of `UIParent` (or sit on the minimap edge, as minimap buttons do) and are placed by reading a game window's position (`GetRight`, `GetTop`), never anchored to, parented to, or written onto a game window, and nothing hooks the game's bag-opening functions. Touching the bag windows made the game block using items from the bags (issue #15). The stand-in client refuses these patterns, and the add-on records any blocked action in `AICompanionDB.blockedActions`.

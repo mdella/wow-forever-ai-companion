@@ -57,7 +57,7 @@ Ask your companion to switch providers when needed. It can run `python aic_auto.
 
 The first check records a baseline without an AI call. An unchanged save or return to a known zone starts nothing. The dashboard rebuilds locally on saves and after successful plan updates.
 
-When an update finishes, a notification asks you to `/reload`. If the data add-on or its `.toc` needs a full game restart, the notification says so.
+When an update finishes, you get a notification on your computer. If the data add-on or its `.toc` needs a full game restart, the notification says so. In the game, about 2 minutes after `/aic save`, the add-on also reminds you in chat, and the panel shows a **Load new advice** button: click it (or type `/reload`) to see the new advice. The game can only load new advice on a reload or login. Turn the in-game reminder off with `/aic reminder off`.
 
 ## Limits and settings
 
