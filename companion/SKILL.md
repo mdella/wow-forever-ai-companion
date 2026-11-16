@@ -184,7 +184,7 @@ It needs Python with `lupa`. Deliver the page however the player prefers (a publ
 
 ### Reporting problems and requests
 
-1. File every add-on bug or feature request as a GitHub issue on `ztarsi/wow-forever-ai-companion`, from the player's account. Issues filed from any other account are ignored. A maintainer agent answers each with a pull request or a question on the issue. If you have no GitHub access, give the player the draft in chat.
+1. File every add-on bug or feature request as a GitHub issue on `ztarsi/wow-forever-ai-companion`, from the player's account. Issues from the owner's account are worked on directly; issues from any other player's account are summarised for the owner, who decides which to work on. A maintainer agent answers each with a pull request or a question on the issue. If you have no GitHub access, give the player the draft in chat.
 2. **No personal data in issues.** The repository is public. No character, realm, account or guild names, no paths containing the user name, and no whole SavedVariables files. Use made-up names in excerpts.
 3. Do not edit the add-on on the player's PC to work around a bug. Report it, and update the add-on once the fix is merged.
 
