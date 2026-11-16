@@ -116,6 +116,7 @@ Keep your private `plans.json` in one persistent folder outside this repository,
 | `/aic sort` | Group your bags by what to do with each item: sell, auction, mail, bank, use, craft, quest, keep. |
 | `/aic feedback` | Report a problem or share an idea, in a small window. Also the Feedback button on the panel. Your companion files it on GitHub after your next `/aic save`. `/aic bug <text>` and `/aic idea <text>` do it in one line. |
 | `/aic panel` | Open your companion panel: this character's plan, inside the game. Also the book button on the minimap (drag it to move it). |
+| `/aic reminder on` / `off` | After `/aic save`, remind me when new advice may be ready, with a "Load new advice" button in the panel. On automatically if you use automatic updates. |
 | Key binding | Choose a key for the panel in the game's Key Bindings screen, under AddOns > AI Companion. |
 | `/aic copy` | Show a text summary you can copy and paste. |
 | `/aic help` | All commands. |

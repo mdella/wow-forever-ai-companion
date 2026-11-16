@@ -99,7 +99,9 @@ class CodexAutomation(AutoTest):
         self.assertIsNone(rec["cost_usd"])
         self.assertEqual(self.store().load("pending.json", None), [])
         with open(self.cfg().data_lua) as f:
-            self.assertIn("Your next step is in town.", f.read())
+            data = f.read()
+        self.assertIn("Your next step is in town.", data)
+        self.assertIn("automatic = true", data, "watcher-published data turns on the in-game reminder")
         self.assertIn("Fully restart", notifications[0][1])
         self.assertFalse(os.path.exists(self.cfg().running_marker))
         self.assertTrue(self.args()["marker"])

@@ -427,7 +427,7 @@ def publish_plan(cfg, store, before):
             with open(live_toc, "rb") as f:
                 atomic_bytes(os.path.join(data_dir, toc_name), f.read())
         staged_lua = os.path.join(data_dir, "AICompanion_Data.lua")
-        p = subprocess.run([cfg["python"], os.path.join(TOOLS, "gen_data.py"), cfg.plans, staged_lua],
+        p = subprocess.run([cfg["python"], os.path.join(TOOLS, "gen_data.py"), cfg.plans, staged_lua, "--automatic"],
                            capture_output=True, text=True, timeout=60,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if p.returncode:
