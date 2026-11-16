@@ -44,6 +44,12 @@ Run this loop at the first session, whenever the player says "refresh" after `/a
 
 Optionally rebuild the dashboard after step 5 (see "Dashboard").
 
+### Unattended updates
+
+When the local watcher starts an automatic run, use its plan-only mode: update the requested parts of the private plan, then stop. The watcher carries out generation, file verification and the notification for every provider. Its `.automation-running` marker identifies this same update; the unattended agent must not wait on or remove it. An interactive companion still waits for another update's marker to disappear before editing.
+
+Automatic runs do not file GitHub issues or publish pages. Leave reporting needs in the run's summary for the interactive companion. This mode does not change the usual interactive working loop above.
+
 ### First session
 
 1. Get folder access to the player's `_forever_` folder, locate the SavedVariables file, parse it.
