@@ -8,6 +8,7 @@ This is a shared entry point for every agent working with this repository. The c
 - For repository development, the existing technical conventions, Forever API constraints, architecture and required checks are recorded in [CLAUDE.md](CLAUDE.md). Follow those repository conventions; Claude-specific tools or setup instructions apply only to Claude.
 - For gameplay assistance, use your provider's companion guide listed below. Do not change add-on source while helping a player.
 - Keep character/account data, snapshots, generated dashboards and private plans outside this repository. The checked-in data add-on stays an empty test template.
+- Automatic updates share `companion/auto/core.py` and the OS schedulers. Keep provider-specific discovery, commands, permissions and result parsing in `companion/auto/providers.py`; select a provider explicitly and never silently fall back to another account.
 - Preserve the existing guides and workflows for every provider. Add or update the relevant provider's instructions without replacing another provider's guide or routing all agents through it.
 - Run `python3 -m unittest discover -s tests -v` (requires `lupa`) before every commit, including documentation changes. Report stand-in-client checks separately from real-game validation.
 
