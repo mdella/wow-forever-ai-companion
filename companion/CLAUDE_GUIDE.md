@@ -33,6 +33,7 @@ Find `<account>` by listing `<game>/WTF/Account/`.
 - Changes to `AICompanion_Data.lua` take effect on `/reload`. A new file or folder, or a changed `.toc`, needs a full game restart.
 - After writing any file to the player's PC, read it back and compare it byte for byte with what you intended to write. If you write through a staging bridge, wait about 20 seconds after your last edit before copying.
 - Never write to the SavedVariables file. The game overwrites it.
+- **Every time you read a new save, check `feedback` first.** The player may have reported a problem or an idea in the game. Handle every entry not yet filed (section 9, point 3) before advising, and say in your reply what you filed.
 
 ## 4. Snapshot format
 
@@ -155,13 +156,14 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 2. If no snapshot exists, ask the player to log in and type `/aic save`.
 3. Report what you see per character: level, class, location, money, bag space, professions, data age.
 4. List what is not captured yet (bank, profession windows, other characters) and ask for those in-game actions.
-5. Research Forever sources for the character's level and zone, then write `plans.json`, generate the data file, and ask for `/reload`, or for a full restart if `gen_data.py` created the data folder (section 6).
+5. If `feedback` has entries not yet filed, file them (section 9, point 3) and tell the player the issue numbers.
+6. Research Forever sources for the character's level and zone, then write `plans.json`, generate the data file, and ask for `/reload`, or for a full restart if `gen_data.py` created the data folder (section 6).
 
 ## 9. Reporting problems and requests
 
 1. File every add-on bug or feature request as a GitHub issue on `ztarsi/wow-forever-ai-companion`, from the player's account. Issues filed from any other account are ignored. A maintainer agent checks issues every hour and answers each with a pull request or a question on the issue.
 2. **No personal data in issues.** The repository is public. No character, realm, account or guild names, no paths containing the user name, and no whole SavedVariables files. Use made-up names in excerpts.
-3. **Feedback left in the game.** Every `feedback` entry without an `issue`, and whose id is not yet in `plans.json` `reported`, becomes one issue: title from the text, kind as a label word in the title ("Problem:", "Idea:"), the text, and the add-on version, client version, zone, whether in combat, the last action and any blocked action. Leave out `character`. Then add the id and the issue number to `reported`, generate, and tell the player it was filed. Several entries about the same thing go in one issue.
+3. **Feedback left in the game.** Every `feedback` entry without an `issue`, and whose id is not yet in `plans.json` `reported`, becomes one issue: title from the text, kind as a label word in the title ("Problem:", "Idea:"), the text, and the add-on version, client version, zone, whether in combat, the last action and any blocked action. Leave out `character`. Then add the id and the issue number to `reported`, generate, and tell the player it was filed. Several entries about the same thing go in one issue. If you cannot create issues (no GitHub access in this assistant), show the player each draft, ready to paste at github.com/ztarsi/wow-forever-ai-companion/issues/new, and add an id to `reported` only once its issue exists.
 4. Do not edit the add-on on the player's PC to work around a bug. Report it, and update the add-on once the fix is merged.
 
 ## Changelog
