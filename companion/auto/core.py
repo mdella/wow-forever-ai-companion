@@ -365,7 +365,7 @@ marker belongs to this run: do not wait for it or remove it.
 {research}
 
 Finish with two to four plain sentences describing the plan changes. Do not claim the game has been updated yet.""".format(
-        guide=shell_path(os.path.join(TOOLS, "SKILL.md" if os.path.isfile(os.path.join(TOOLS, "SKILL.md")) else cfg.provider.guide)), changes="\n".join("- " + c["text"] for c in pending),
+        guide=shell_path(os.path.join(TOOLS, "SKILL.md")), changes="\n".join("- " + c["text"] for c in pending),
         plans=shell_path(cfg.plans), sv=shell_path(cfg.saved_variables), py=py,
         research=research)
     return text, bool(web)

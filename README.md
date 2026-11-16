@@ -38,15 +38,31 @@ Choose the AI assistant you prefer. The add-on saves the same snapshots and read
 
 For advice in tooltips, the in-game plan panel and a dashboard, your assistant needs local file and command access on the game computer. It reads your saved snapshots, researches Forever sources, and uses the tools in `companion/` to write your private plan and data add-on. An assistant without local tools can give advice in chat from a summary you paste with `/aic copy`.
 
-The table above describes the features available with a companion that has local tools. Use the setup section for your chosen assistant below.
+The table above describes the features available with a companion that has local tools. Give your assistant the skill first, then use the setup section for your chosen assistant below.
+
+### Give your assistant the skill
+
+Everything your assistant needs is in the `companion` folder. `companion/SKILL.md` holds the rules, the steps of each session and the file formats, and the tools it uses sit beside it. Copying that folder is the whole install.
+
+**If your assistant supports skills** (it can load a `SKILL.md` on its own):
+
+1. Make a copy of the `companion` folder and name the copy `wow-forever-companion`.
+2. Add it as a skill:
+   - **Claude desktop app:** zip the `wow-forever-companion` folder, then add the zip under Settings, Capabilities, Skills.
+   - **Claude Code:** put the folder in the `.claude/skills` folder inside your user folder.
+   - **Other assistants:** add it wherever your assistant's help says skills go.
+3. Start a chat and mention the game, for example *"refresh my WoW Forever companion"*. The assistant loads the skill by itself.
+
+**If your assistant does not support skills:** attach `companion/SKILL.md` to the chat (or add it as a project file) and say *"Be my WoW Forever companion. Follow the attached SKILL.md."*
+
+When you download a new version of this kit, replace your copy of the folder the same way.
 
 ### Claude
 
 You need a Claude subscription and the Claude desktop app on the same computer as the game.
 
-1. Start a new chat in the Claude desktop app.
-2. Attach `companion/CLAUDE_GUIDE.md` from this repository and say:
-   *"Be my WoW Forever companion. Follow the attached guide. My game folder is `<path to your _forever_ folder>`."*
+1. Add the skill (above), or attach `companion/SKILL.md` to a new chat in the Claude desktop app.
+2. Say: *"Be my WoW Forever companion. My game folder is `<path to your _forever_ folder>`."*
 3. Approve the folder access Claude asks for.
 
 Claude reads your snapshot, researches Forever sources, and writes its advice into `AICompanion_Data`. Type `/reload` in the game to see it.
@@ -61,7 +77,7 @@ Use a local Codex app, CLI or IDE session with file and command tools. See [Open
 
 1. Open this repository folder as your Codex project or working directory. Codex reads the root `AGENTS.md`.
 2. Start a chat and say:
-   *"Be my WoW Forever companion. Read AGENTS.md and companion/CODEX_GUIDE.md. My game folder is `<path to your _forever_ folder>`. Use `<private folder outside this repository>` for my persistent plans.json. Read my latest snapshots, preserve any existing plans, and write updated advice for the game."*
+   *"Be my WoW Forever companion. Read AGENTS.md, companion/SKILL.md and companion/CODEX_GUIDE.md. My game folder is `<path to your _forever_ folder>`. Use `<private folder outside this repository>` for my persistent plans.json. Read my latest snapshots, preserve any existing plans, and write updated advice for the game."*
 3. Grant the folder permissions Codex requests. It handles Python setup, snapshot parsing and generation, then writes advice into `AICompanion_Data`. If the data add-on does not exist, it creates it.
 4. Type `/reload` when asked, or fully restart and enable "AI Companion Data" when the data add-on is first created or its `.toc` changes.
 
@@ -71,9 +87,9 @@ In-game advice requires local file access on the game computer. A remote Codex c
 
 #### ChatGPT chat / Projects (advice in chat)
 
-1. Attach `companion/CODEX_GUIDE.md` to a chat, or add it as a Project file and instruct ChatGPT to follow it.
+1. Attach `companion/SKILL.md` and `companion/CODEX_GUIDE.md` to a chat, or add them as Project files and instruct ChatGPT to follow them.
 2. In the game, type `/aic save`, then `/aic copy`. Paste the summary into chat.
-3. Say: *"Be my WoW Forever companion. Follow the attached guide in advice-only mode. Here is my saved character summary. Tell me what to do next, label sources that are unconfirmed for Forever, and tell me what information is missing."*
+3. Say: *"Be my WoW Forever companion. Follow the attached guides in advice-only mode. Here is my saved character summary. Tell me what to do next, label sources that are unconfirmed for Forever, and tell me what information is missing."*
 
 This gives you advice in chat. Updating tooltips and the in-game panel requires a local assistant with file access. Repeat the save-and-paste step when you want updated advice. [A ChatGPT Project alone does not grant access to a folder on your PC.](https://learn.chatgpt.com/docs/projects)
 
@@ -83,7 +99,7 @@ Setup guide coming soon. Gemini-specific instructions have not been added or ver
 
 ### Other AI assistants
 
-Use an assistant with local file access and command execution for the full workflow, or paste `/aic copy` output for advice in chat. The companion guides in `companion/` document the snapshot and plan formats. Ask your assistant to follow the same Forever source checks, keep SavedVariables read-only, and preserve your private plans. Provider-specific setup may differ.
+Use an assistant with local file access and command execution for the full workflow, or paste `/aic copy` output for advice in chat. Give it the skill (above): `companion/SKILL.md` holds the rules and the snapshot and plan formats. Ask your assistant to follow the same Forever source checks, keep SavedVariables read-only, and preserve your private plans. Provider-specific setup may differ.
 
 ### Switching between assistants
 
@@ -97,8 +113,10 @@ Keep your private `plans.json` in one persistent folder outside this repository,
 | `/aic ask <question>` | Leave a question for your companion with the next snapshot. |
 | `/aic ah` | At an auctioneer: check prices for your bags, bank and shopping list. If you use Auctionator, its prices are used instead and this checks only what Auctionator hasn't seen lately. |
 | `/aic ah age <days>` | With Auctionator: how many days its prices count as fresh (default 5). Older than that, the "check prices" button comes back. |
-| `/aic sort` | Group your bags by what to do with each item: sell, auction, mail, bank, use, craft, quest, keep. Also a "Sort by advice" button above your bags. |
+| `/aic sort` | Group your bags by what to do with each item: sell, auction, mail, bank, use, craft, quest, keep. |
+| `/aic feedback` | Report a problem or share an idea, in a small window. Also the Feedback button on the panel. Your companion files it on GitHub after your next `/aic save`. `/aic bug <text>` and `/aic idea <text>` do it in one line. |
 | `/aic panel` | Open your companion panel: this character's plan, inside the game. Also the book button on the minimap (drag it to move it). |
+| Key binding | Choose a key for the panel in the game's Key Bindings screen, under AddOns > AI Companion. |
 | `/aic copy` | Show a text summary you can copy and paste. |
 | `/aic help` | All commands. |
 
@@ -118,7 +136,7 @@ Auction 7c (2653 listed, 34m ago)          vendor 1c
 
 ## Good to know
 
-- WoW: Forever is new. Much of what is written online is about older versions of the game. The companion guides tell your assistant to say so whenever its source is not about Forever. When the game and the advice disagree, the game is right.
+- WoW: Forever is new. Much of what is written online is about older versions of the game. The companion skill tells your assistant to say so whenever its source is not about Forever. When the game and the advice disagree, the game is right.
 - The built-in rules know item categories, not recipes. They will not tell you what to craft.
 - The add-on writes its file only on `/reload` or logout. Advice is only as fresh as your last save.
 - If you use **Auctionator**, AI Companion reads its prices, so you don't need the "check prices" button. The button only appears when Auctionator's prices are older than 5 days, or Auctionator isn't installed.
@@ -129,9 +147,10 @@ Auction 7c (2653 listed, 34m ago)          vendor 1c
 |---|---|
 | `AddOns/AICompanion/` | The add-on: `AICompanion.lua` (snapshots, auction check, tooltips) and `AICompanion_Rules.lua` (built-in advice rules). |
 | `AddOns/AICompanion_Data/` | Empty template of the data add-on, used by the tests. Not installed; your companion creates your own copy. |
-| `companion/CLAUDE_GUIDE.md` | Claude companion instructions. |
+| `companion/SKILL.md` | The companion skill: rules, the steps of each session, and the file formats, for every assistant. |
+| `companion/CLAUDE_GUIDE.md` | Claude-only setup. Points to `SKILL.md`. |
 | `AGENTS.md` | Shared entry point for all agents, with common rules and separate provider-specific sections. |
-| `companion/CODEX_GUIDE.md` | Optional Codex / ChatGPT setup, gameplay instructions and starting prompts. |
+| `companion/CODEX_GUIDE.md` | Optional Codex / ChatGPT setup and starting prompts. Points to `SKILL.md`. |
 | `companion/` | Tools the assistant uses: `gen_data.py` (writes the data add-on from a plan file), `build.py` and `template.html` (dashboard), `plans.example.json` (plan file format). |
 | `companion/auto/` | Optional automatic updates with Claude Code or Codex CLI: shared checking/publishing, separate provider adapters and Windows/macOS schedulers. |
 | `FOREVER_INTERFACE` | The game version the add-on supports, set in this one place. `tools/set_interface.py` copies it into the other files. |

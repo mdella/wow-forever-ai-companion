@@ -73,10 +73,15 @@ for cname, c in d.get("characters", {}).items():
     p = {k: c[k] for k in PLAN_KEYS if c.get(k) not in (None, "", [], {})}
     assert len(p.get("headlineShort", "")) <= 100, "headlineShort over 100 characters for %s" % cname
     if p: plans[cname] = p
+# Feedback the player left with /aic feedback that the companion has filed: entry id -> issue ("#34").
+reported = d.get("reported") or {}
+assert isinstance(reported, dict) and all(isinstance(v, str) for v in reported.values()), \
+    "\"reported\" maps a feedback id to its issue, for example {\"20261116-101500-3\": \"#34\"}"
 out += ["AICompanionPlans = {",
         "    asOf = %s," % q(datetime.date.today().strftime("%b %d").replace(" 0", " ")),
         "    sources = %s," % lua(d.get("sources") or {}, "    "),
         "    characters = %s," % lua(plans, "    "),
+        "    reported = %s," % lua(reported, "    "),
         "}", ""]
 folder = os.path.dirname(os.path.abspath(target))
 interface, interface_from = addon_interface(folder)

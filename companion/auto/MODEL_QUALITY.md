@@ -30,7 +30,7 @@ Passing this check establishes basic instruction/format adherence on supplied fa
 
 ## Live watcher smoke check
 
-The real selected-provider runner was also exercised once each with Codex `gpt-6-luna` and Claude `haiku`, using a made-up snapshot and private plan in a scratch game-folder tree. Both completed a level-up update, generated and verified the data add-on, and cleared the pending queue. Luna completed in 19.9 seconds with no dollar cost reported; Haiku completed in 15.4 seconds with a $0.00569 CLI usage estimate. These longer runs included reading the guide, parsing the synthetic snapshot and editing the plan.
+The real selected-provider runner was also exercised with Codex `gpt-6-luna` and Claude `haiku`, using a made-up snapshot and private plan in a scratch game-folder tree. Both completed a level-up update, generated and verified the data add-on, and cleared the pending queue. After integrating the shared-skill changes, the latest rerun completed in 16.8 seconds for Luna with no dollar cost reported, and 11.7 seconds for Haiku with a $0.00424 CLI usage estimate. These longer runs included reading the guide, parsing the synthetic snapshot and editing the plan.
 
 This confirms that the tested CLIs can execute the implemented workflow on this Mac. It does not validate gameplay recommendations against the actual game or establish Windows/free-account behavior. No watcher was installed for these checks and no real game files were changed.
 

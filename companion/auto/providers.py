@@ -54,7 +54,7 @@ def version_checks(provider, cfg):
 
 
 class Claude:
-    name, label, guide = "claude", "Claude Code", "CLAUDE_GUIDE.md"
+    name, label = "claude", "Claude Code"
     default_model, model_setting, supports_dollar_cap = "sonnet", "model", True
     check_note = None
     setup = "install Claude Code and sign in once (it needs a paid Claude plan)"
@@ -89,7 +89,7 @@ class Claude:
 
 
 class Codex:
-    name, label, guide = "codex", "Codex CLI", "CODEX_GUIDE.md"
+    name, label = "codex", "Codex CLI"
     # Do not force a paid-only model or pass Claude's legacy 'sonnet' setting to Codex.
     default_model, model_setting, supports_dollar_cap = None, "codex_model", False
     check_note = "Codex has no dollar cap flag; daily/gap limits apply. API-key auth is separately billed."

@@ -117,7 +117,7 @@ class CodexAutomation(AutoTest):
         self.assertIn('web_search="disabled"', cmd)
         self.assertIn("sandbox_workspace_write.network_access=false", cmd)
         self.assertIn("sandbox_workspace_write.writable_roots=[]", cmd)
-        self.assertIn("CODEX_GUIDE.md", args["prompt"])
+        self.assertIn("SKILL.md", args["prompt"])
         self.assertNotIn("CLAUDE_GUIDE.md", args["prompt"])
         self.assertIn("do not wait for it", args["prompt"])
         self.assertIn("Do not edit the game folder", args["prompt"])
@@ -157,6 +157,14 @@ class CodexAutomation(AutoTest):
                 self.assertFalse(os.path.exists(self.cfg().data_lua))
                 self.assertEqual(notifications, [])
                 self.assertFalse(os.path.exists(self.cfg().running_marker))
+
+    def test_invalid_existing_plan_does_not_spend_ai_usage(self):
+        with open(self.cfg().plans, "w") as f:
+            f.write("not json")
+        self.trigger()
+        self.assertEqual(self.store().runs(), [])
+        self.assertTrue(self.store().load("pending.json", []))
+        self.assertFalse(os.path.exists(os.path.join(self.home, "codex_args.json")))
 
     def test_removed_character_is_rejected(self):
         with open(self.cfg().plans, "w") as f:
