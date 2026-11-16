@@ -755,3 +755,18 @@ class KeyBinding(PanelTest):
         b = g.lua.globals().AICompanionMinimapButton
         b.scripts.OnEnter(b)
         self.assertEqual(to_py(g.lua.globals().GameTooltip.lines)[1], "Click or press Shift-P: open the plan")
+
+
+class FeedbackButton(PanelTest):
+    """The panel has a way to report a problem or give feedback."""
+
+    def test_feedback_button_opens_the_feedback_window(self):
+        g = self.game(data_source=data_file())
+        f = self.open(g)
+        b = f.feedbackButton
+        self.assertEqual(b.text, "Feedback")
+        self.assertTrue(g.lua.eval("AICompanionPanel.feedbackButton.parent ~= nil"))
+        b.scripts.OnClick(b)
+        self.assertTrue(g.lua.globals().AICompanionFeedbackFrame.shown)
+        self.assertEqual(g.lua.eval("AICompanionFeedbackFrame.strata"), "FULLSCREEN_DIALOG")   # above the panel
+        self.assertEqual(f.strata, "DIALOG")

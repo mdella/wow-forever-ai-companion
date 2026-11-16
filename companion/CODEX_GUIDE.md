@@ -93,6 +93,7 @@ AICompanionDB
     auction       { scannedAtText, lastRun, results["<item name>"] }
   questTitles     quest ID to title
   questions       questions left with /aic ask
+  feedback        the last 30 problems and ideas left with /aic feedback: id, atText, kind (problem, idea or feedback), text, addonVersion, clientVersion, zone, subZone, inCombat, lastAction, lastBlocked, lastEventError, and issue once filed. File each one (section 9).
   blockedActions  the last 20 actions the game blocked and blamed on the add-on: event, func, atText, inCombat, lastAction, addonVersion. Report any entry as an issue.
   tooltipHook     "ok" when the tooltip feature registered
 ```
@@ -116,9 +117,11 @@ Known limits:
 | `/aic ask <question>` | Stores a question with the next save. |
 | `/aic ah` | At an auctioneer: price check of bags, bank and the shopping list. Takes about a minute. Results reach disk at the next save. With Auctionator, it checks only the items Auctionator has no fresh price for, and the button at the bottom right of the auction window appears only when Auctionator's prices are missing or older than the setting. |
 | `/aic ah age <days>` | With Auctionator: how many days its prices count as fresh (default 5). |
-| `/aic sort` | Groups the bags by advice: sell, auction, mail, bank, use, craft, quest, keep, then the rest. Also a "Sort by advice" button above the bag window. |
+| `/aic sort` | Groups the bags by advice: sell, auction, mail, bank, use, craft, quest, keep, then the rest. |
 | `/aic panel` | Opens the companion panel: this character's plan, with self-ticking steps. Also the minimap button. |
-| `/aic sort debug` | What the bag sort found (bag windows, button) and why it last stopped. Saved in `AICompanionDB.sortDebug` for you to read. |
+| `/aic sort debug` | What the bag sort found (bag windows) and why it last stopped. Saved in `AICompanionDB.sortDebug` for you to read. |
+| `/aic feedback` | Opens a window to report a problem or share an idea; also the Feedback button on the panel. Saved in `feedback`; reaches disk at the next save. |
+| `/aic bug <text>`, `/aic idea <text>` | The same in one line. |
 | `/aic copy` | Text summary the player can paste into chat. |
 | `/aic help` | Command list. |
 
@@ -180,7 +183,7 @@ python3 -I build.py "<SavedVariables file>" "<private folder>/plans.json" templa
 
 It needs Python with `lupa`. Deliver the page however the player prefers (a published page or a file). Rebuild after each new snapshot.
 
-`plans.json` schema: see `plans.example.json`. Fields per character: `headline`, `headlineShort` (optional, at most 100 characters, written to the player as "you"; the in-game panel shows it, or else the first sentence of `headline`), `next` (steps, **in the order to do them**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order.
+`plans.json` schema: see `plans.example.json`. Fields per character: `headline`, `headlineShort` (optional, at most 100 characters, written to the player as "you"; the in-game panel shows it, or else the first sentence of `headline`), `next` (steps, **in the order to do them**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order. `reported` (top level) maps each `feedback` id you filed to its issue, for example `{"20261116-101500-3": "#34"}`; the game then shows it as sent.
 
 Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (a key in `sources`) and `done`.
 
@@ -200,10 +203,12 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 1. Prepare a GitHub issue for every add-on bug or feature request on `ztarsi/wow-forever-ai-companion`. File it from the player's account only when the player has asked you to report it; otherwise show the draft. If GitHub access is unavailable, provide the draft in chat.
 2. **No personal data in issues.** The repository is public. No character, realm, account or guild names, no paths containing the user name, and no whole SavedVariables files. Use made-up names in excerpts.
-3. Do not edit the add-on on the player's PC to work around a bug. Report it, and update the add-on once the fix is merged.
+3. **Feedback left in the game.** Every `feedback` entry without an `issue`, and whose id is not yet in `plans.json` `reported`, becomes one issue: title from the text, kind as a label word in the title ("Problem:", "Idea:"), the text, and the add-on version, client version, zone, whether in combat, the last action and any blocked action. Leave out `character`. Then add the id and the issue number to `reported`, generate, and tell the player it was filed. Several entries about the same thing go in one issue.
+4. Do not edit the add-on on the player's PC to work around a bug. Report it, and update the add-on once the fix is merged.
 
 ## Changelog
 
+- 0.13.0 — Feedback from inside the game: `/aic feedback` (or the panel's Feedback button) opens a window to report a problem or share an idea; `/aic bug <text>` and `/aic idea <text>` do it in one line. Entries are kept in `feedback` in the saved file with the add-on version, place and what the add-on last did, reach the companion at the next `/aic save`, and show "Sent as issues" once the companion lists them under `reported` in `plans.json`. The "Sort by advice" button above the bags is withdrawn while the sort is rethought; `/aic sort` still works. `/reload` is enough.
 - 0.11.0 — Prices from Auctionator when the player has it, in `snapshot.auctionator`. The "check prices" button appears only when Auctionator is missing or its prices are older than `/aic ah age` (default 5 days), and `/aic ah` then checks only the rest. The add-on's own tooltip price line is left out for items Auctionator prices. Needs a full game restart once (`.toc` change).
 - 0.10.4 — Installing is one folder, `AICompanion`. `gen_data.py` creates `AICompanion_Data` and its `.toc` when missing, so an install or update can never replace the player's data. The data add-on's game version follows the installed add-on release. Snapshots record `client.dataAddon`.
 - 0.10.3 — Includes 0.9.2: using items from the bags is no longer blocked, and blocked actions are recorded in `blockedActions`. The panel's minimap button and window were checked against the same rule: they sit on the minimap edge and on UIParent and never touch a game window.
