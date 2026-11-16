@@ -709,3 +709,49 @@ class FitsAtEveryWidth(PanelTest):
         self.assertLessEqual(note[2], 560 - 2 * 14)     # inside the window's margins
         self.assertTrue(by_text["Open your Leatherworking window once."][1])
         self.assertEqual([r[0] for r in rows if r[3] == 1], [])   # nothing limited to one line
+
+
+class KeyBinding(PanelTest):
+    """Issue #25: a Key Bindings entry that opens and closes the panel."""
+
+    BINDING = "AICOMPANION_TOGGLE_PANEL"
+
+    def test_key_bindings_screen_entry(self):
+        g = self.game(data_source=data_file())
+        b = g.M.bindings[self.BINDING]
+        self.assertEqual((b.header, b.category), ("AICOMPANION", "ADDONS"))
+        self.assertEqual(g.lua.globals().BINDING_HEADER_AICOMPANION, "AI Companion")
+        self.assertEqual(g.lua.globals()["BINDING_NAME_" + self.BINDING], "Open or close the panel")
+
+    def test_key_opens_and_closes_the_panel(self):
+        g = self.game(data_source=data_file())
+        g.press_binding(self.BINDING)
+        self.assertTrue(self.panel(g).isShown())
+        g.press_binding(self.BINDING)
+        self.assertFalse(self.panel(g).isShown())
+
+    def test_key_does_not_open_the_panel_in_combat(self):
+        g = self.game(data_source=data_file())
+        g.set("inCombat", True)
+        g.press_binding(self.BINDING)
+        self.assertFalse(self.panel(g).isShown())
+        self.assertTrue(any("opens after combat" in l for l in g.chat()))
+
+    def test_escape_still_closes_it(self):
+        g = self.game(data_source=data_file())
+        g.press_binding(self.BINDING)
+        self.assertIn("AICompanionPanel", to_py(g.lua.globals().UISpecialFrames))
+
+    def test_loads_cleanly_with_no_key_set(self):
+        g = self.game(data_source=data_file())               # tearDown checks for errors and stray globals
+        b = g.lua.globals().AICompanionMinimapButton
+        b.scripts.OnEnter(b)
+        self.assertEqual(to_py(g.lua.globals().GameTooltip.lines)[1], "Click: open the plan")
+
+    def test_tooltip_shows_the_chosen_key(self):
+        w = W.world()
+        w["bindings"] = {self.BINDING: "SHIFT-P"}
+        g = self.game(w, data_source=data_file())
+        b = g.lua.globals().AICompanionMinimapButton
+        b.scripts.OnEnter(b)
+        self.assertEqual(to_py(g.lua.globals().GameTooltip.lines)[1], "Click or press Shift-P: open the plan")

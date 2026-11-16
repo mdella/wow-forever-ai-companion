@@ -75,6 +75,7 @@ Known limits:
 | `/aic ah age <days>` | With Auctionator: how many days its prices count as fresh (default 5). |
 | `/aic sort` | Groups the bags by advice: sell, auction, mail, bank, use, craft, quest, keep, then the rest. Also a "Sort by advice" button above the bag window. |
 | `/aic panel` | Opens the companion panel: this character's plan, with self-ticking steps. Also the minimap button. |
+| Key binding | Key Bindings > AddOns > AI Companion > "Open or close the panel". The player picks the key; none is set by default. |
 | `/aic sort debug` | What the bag sort found (bag windows, button) and why it last stopped. Saved in `AICompanionDB.sortDebug` for you to read. |
 | `/aic copy` | Text summary the player can paste into chat. |
 | `/aic help` | Command list. |
@@ -161,6 +162,7 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 
 ## Changelog
 
+- 0.12.2 — Key binding: Key Bindings > AddOns > AI Companion > "Open or close the panel". No key by default; the minimap button's tooltip names the key once one is set. Adds `Bindings.xml`: one full game restart.
 - 0.12.1 — The panel's tabs never run past the window's edge: they keep their natural width when all six fit and share the width evenly otherwise, at every allowed size, and the plain fallback buttons do the same. A size saved by an older version is brought within today's limits when the panel opens.
 - 0.12.0 — The panel is a native game window (the approved mockup): the client's titled frame "AI Companion · name" with tabs along the bottom, the headline in a band, "N of M done", the next step highlighted with a "Next" label, an arrow on the right of each step (right when closed, down when open), finished steps greyed under a Done divider, Bags and "I can't see yet" at the end, and the footer "Snapshot today 17:44 · Plan Nov 14". Falls back to a plain window if the client lacks the templates. Needs a full restart.
 - 0.11.0 — Prices from Auctionator when the player has it, in `snapshot.auctionator`. The "check prices" button appears only when Auctionator is missing or its prices are older than `/aic ah age` (default 5 days), and `/aic ah` then checks only the rest. The add-on's own tooltip price line is left out for items Auctionator prices. Needs a full game restart once (`.toc` change).
