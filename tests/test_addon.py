@@ -588,34 +588,22 @@ class BagSort(GameTest):
         g.advance(120)
         self.assertEqual(self.names_in_order(g), SORTED_ORDER)
 
-    def sort_button(self, g):
-        return g.lua.globals().AICompanionSortButton
-
-    def test_button_follows_the_open_bag_window(self):
+    def test_no_sort_button(self):
+        """The "Sort by advice" button is withdrawn while the sort is rethought; /aic sort stays."""
         w = sort_world()
         w["bagFrames"] = "login"
         g = self.game(w)
-        b = self.sort_button(g)
-        self.assertTrue(g.lua.eval("AICompanionSortButton.parent == UIParent"))   # never a child of a bag window
-        self.assertFalse(b.shown)                                                  # bags closed
         g.lua.execute("OpenAllBags()")
-        g.advance(0.3)
-        self.assertTrue(b.shown)
-        p = to_py(b.point)
-        self.assertEqual((p[0], p[2], p[3], p[4]), ("BOTTOMRIGHT", "BOTTOMLEFT", 1596, 602))   # just above the window's top right
-        self.assertTrue(g.lua.eval("AICompanionSortButton.point[2] == UIParent"))
-        g.lua.execute("ToggleAllBags()")
-        g.advance(0.3)
-        self.assertFalse(b.shown)
-
-    def test_button_when_bag_windows_appear_late(self):
-        w = sort_world()
-        w["bagFrames"] = "late"
-        g = self.game(w)
-        self.assertFalse(self.sort_button(g).shown)
-        g.lua.execute("OpenAllBags()")
-        g.advance(0.3)
-        self.assertTrue(self.sort_button(g).shown)
+        g.advance(1)
+        self.assertIsNone(g.lua.globals().AICompanionSortButton)
+        shown = to_py(g.lua.eval('''(function() local o = {}
+            for _, fr in ipairs(Mock.frames) do
+                if fr.text == "Sort by advice" then o[#o + 1] = fr.text end
+            end return o end)()''')) or []
+        self.assertEqual(shown, [])
+        g.slash("/aic sort")
+        g.advance(30)
+        self.assertEqual(self.names_in_order(g), SORTED_ORDER)
 
     def test_nothing_hooks_bag_opening(self):
         w = sort_world()
@@ -624,17 +612,6 @@ class BagSort(GameTest):
         g.lua.execute("OpenAllBags() ToggleAllBags() ToggleAllBags()")
         g.advance(1)
         self.assertEqual(to_py(g.M.hooks) or [], [])
-
-    def test_button_click_sorts(self):
-        w = sort_world()
-        w["bagFrames"] = "login"
-        g = self.game(w)
-        g.lua.execute("OpenAllBags()")
-        g.advance(0.3)
-        b = self.sort_button(g)
-        b.scripts.OnClick(b)
-        g.advance(30)
-        self.assertEqual(self.names_in_order(g), SORTED_ORDER)
 
     def test_debug_report(self):
         w = sort_world()
@@ -645,7 +622,7 @@ class BagSort(GameTest):
         g.slash("/aic sort debug")
         chat = " ".join(g.chat())
         self.assertIn("bag windows: ContainerFrameCombinedBags (open), ContainerFrame1 (closed)", chat)
-        self.assertIn("sort button: shown above ContainerFrameCombinedBags", chat)
+        self.assertNotIn("sort button", chat)
         g.slash("/aic sort")
         g.advance(30)
         g.slash("/aic save")
@@ -747,6 +724,141 @@ class BagSortRealTiming(GameTest):
         g.advance(30)
         line = next(l for l in g.chat() if "your bags changed" in l)
         self.assertIn("(bag 0 slot 16: expected empty, found Broken Fang)", line)
+
+def data_with_reported(reported):
+    """A data add-on file whose plan says which feedback entries the companion filed as issues."""
+    pairs = "".join('["%s"] = "%s", ' % kv for kv in reported.items())
+    return ('AICompanionShopping = {}\nAICompanionAdvice = { asOf = "Nov 16", characters = {} }\n'
+            'AICompanionPlans = { asOf = "Nov 16", sources = {}, characters = {}, reported = { %s } }\n' % pairs)
+
+
+class Feedback(GameTest):
+    """Report a problem or give feedback from inside the game; the companion files it on GitHub."""
+
+    def feedback(self, g, source=None):
+        return (source if source is not None else g.db()).get("feedback") or []
+
+    def window(self, g):
+        return g.lua.globals().AICompanionFeedbackFrame
+
+    def test_typed_feedback_is_saved_with_context(self):
+        g = self.game()
+        g.slash("/aic feedback The panel covers my map")
+        [e] = self.feedback(g)
+        self.assertEqual((e["kind"], e["text"]), ("feedback", "The panel covers my map"))
+        self.assertEqual(e["addonVersion"], g.db()["addonVersion"])
+        self.assertEqual((e["zone"], e["subZone"], e["inCombat"]), ("Testvale", "Testtown", False))
+        self.assertRegex(e["id"], r"^\d{8}-\d{6}-\d+$")
+        self.assertIn("atText", e)
+        self.assertIn("lastAction", e)
+        self.assertTrue(any("feedback saved" in l and "/aic save" in l for l in g.chat()))
+        g.slash("/aic save")
+        self.assertEqual(self.feedback(g, g.disk())[0]["text"], "The panel covers my map")
+
+    def test_bug_is_a_problem(self):
+        g = self.game()
+        g.slash("/aic bug Tooltip shows twice")
+        self.assertEqual(self.feedback(g)[0]["kind"], "problem")
+
+    def test_records_what_went_wrong_recently(self):
+        g = self.game()
+        g.fire("ADDON_ACTION_BLOCKED", "AICompanion", "UseContainerItem()")
+        g.slash("/aic bug Could not use my potion")
+        self.assertEqual(self.feedback(g)[0]["lastBlocked"], "UseContainerItem()")
+
+    def test_window_opens_without_text(self):
+        g = self.game()
+        g.slash("/aic feedback")
+        f = self.window(g)
+        self.assertTrue(f.shown)
+        self.assertTrue(g.lua.eval("AICompanionFeedbackFrame.parent == UIParent"))
+        self.assertEqual(self.feedback(g), [])
+
+    def test_window_saves_a_problem(self):
+        g = self.game()
+        g.slash("/aic feedback")
+        f = self.window(g)
+        f.problemButton.scripts.OnClick(f.problemButton)
+        f.editBox.SetText(f.editBox, "The Next label overlaps the arrow")
+        f.saveButton.scripts.OnClick(f.saveButton)
+        [e] = self.feedback(g)
+        self.assertEqual((e["kind"], e["text"]), ("problem", "The Next label overlaps the arrow"))
+        self.assertFalse(f.shown)
+        self.assertTrue(any("feedback saved" in l for l in g.chat()))
+
+    def test_window_saves_an_idea(self):
+        g = self.game()
+        g.slash("/aic feedback")
+        f = self.window(g)
+        f.ideaButton.scripts.OnClick(f.ideaButton)
+        f.editBox.SetText(f.editBox, "Show the next step on the minimap")
+        f.saveButton.scripts.OnClick(f.saveButton)
+        self.assertEqual(self.feedback(g)[0]["kind"], "idea")
+
+    def test_window_refuses_empty_text(self):
+        g = self.game()
+        g.slash("/aic feedback")
+        f = self.window(g)
+        f.editBox.SetText(f.editBox, "   ")
+        f.saveButton.scripts.OnClick(f.saveButton)
+        self.assertEqual(self.feedback(g), [])
+        self.assertTrue(f.shown)
+
+    def test_cancel_saves_nothing(self):
+        g = self.game()
+        g.slash("/aic feedback")
+        f = self.window(g)
+        f.editBox.SetText(f.editBox, "never mind")
+        f.cancelButton.scripts.OnClick(f.cancelButton)
+        self.assertEqual(self.feedback(g), [])
+        self.assertFalse(f.shown)
+
+    def test_keeps_the_last_thirty(self):
+        g = self.game()
+        for i in range(35):
+            g.slash("/aic feedback note %d" % i)
+        entries = self.feedback(g)
+        self.assertEqual((len(entries), entries[0]["text"], entries[-1]["text"]), (30, "note 5", "note 34"))
+        self.assertEqual(len({e["id"] for e in entries}), 30)
+
+    def test_filed_entries_are_marked_with_their_issue(self):
+        g = self.game()
+        g.slash("/aic bug First")
+        g.slash("/aic feedback Second")
+        g.slash("/aic save")
+        first, second = self.feedback(g, g.disk())
+        g.logout()
+        g2 = self.game(saved=g.saved, data_source=data_with_reported({first["id"]: "#34"}))
+        a, b = self.feedback(g2)
+        self.assertEqual((a.get("issue"), b.get("issue")), ("#34", None))
+        g2.slash("/aic feedback")
+        self.assertEqual(self.window(g2).status.text, "Waiting for your companion: 1. Sent as issues: 1 (#34).")
+
+    def test_status_line_with_nothing_sent(self):
+        g = self.game()
+        g.slash("/aic feedback")
+        self.assertEqual(self.window(g).status.text,
+                         "Saved here until you type /aic save; your companion files it on GitHub.")
+
+    def test_help_lists_feedback(self):
+        g = self.game()
+        g.slash("/aic help")
+        self.assertTrue(any("/aic feedback" in l for l in g.chat()))
+        self.assertTrue(any("/aic bug" in l for l in g.chat()))
+        self.assertFalse(any("Sort by advice" in l for l in g.chat()))
+
+    def test_gen_data_writes_reported(self):
+        d = tempfile.mkdtemp()
+        src, out = os.path.join(d, "plans.json"), os.path.join(d, "AICompanion_Data", "AICompanion_Data.lua")
+        with open(src, "w", encoding="utf-8") as f:
+            f.write('{"characters": {}, "reported": {"20261116-101500-1": "#34"}}')
+        subprocess.run([sys.executable, os.path.join(ROOT, "companion/gen_data.py"), src, out],
+                       check=True, capture_output=True)
+        with open(out, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn('reported = {', text)
+        self.assertIn('["20261116-101500-1"] = "#34"', text)
+
 
 class WithoutDataFolder(GameTest):
     """Installing is one folder: AICompanion_Data appears only once the companion writes advice."""

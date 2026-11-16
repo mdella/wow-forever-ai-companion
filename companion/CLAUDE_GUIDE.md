@@ -33,6 +33,7 @@ Find `<account>` by listing `<game>/WTF/Account/`.
 - Changes to `AICompanion_Data.lua` take effect on `/reload`. A new file or folder, or a changed `.toc`, needs a full game restart.
 - After writing any file to the player's PC, read it back and compare it byte for byte with what you intended to write. If you write through a staging bridge, wait about 20 seconds after your last edit before copying.
 - Never write to the SavedVariables file. The game overwrites it.
+- **Every time you read a new save, check `feedback` first.** The player may have reported a problem or an idea in the game. Handle every entry not yet filed (section 9, point 3) before advising, and say in your reply what you filed.
 
 ## 4. Snapshot format
 
@@ -50,6 +51,7 @@ AICompanionDB
     auction       { scannedAtText, lastRun, results["<item name>"] }
   questTitles     quest ID to title
   questions       questions left with /aic ask
+  feedback        the last 30 problems and ideas left with /aic feedback: id, atText, kind (problem, idea or feedback), text, addonVersion, clientVersion, zone, subZone, inCombat, lastAction, lastBlocked, lastEventError, and issue once filed. File each one (section 9).
   blockedActions  the last 20 actions the game blocked and blamed on the add-on: event, func, atText, inCombat, lastAction, addonVersion. Report any entry as an issue.
   tooltipHook     "ok" when the tooltip feature registered
 ```
@@ -73,10 +75,12 @@ Known limits:
 | `/aic ask <question>` | Stores a question with the next save. |
 | `/aic ah` | At an auctioneer: price check of bags, bank and the shopping list. Takes about a minute. Results reach disk at the next save. With Auctionator, it checks only the items Auctionator has no fresh price for, and the button at the bottom right of the auction window appears only when Auctionator's prices are missing or older than the setting. |
 | `/aic ah age <days>` | With Auctionator: how many days its prices count as fresh (default 5). |
-| `/aic sort` | Groups the bags by advice: sell, auction, mail, bank, use, craft, quest, keep, then the rest. Also a "Sort by advice" button above the bag window. |
+| `/aic sort` | Groups the bags by advice: sell, auction, mail, bank, use, craft, quest, keep, then the rest. |
 | `/aic panel` | Opens the companion panel: this character's plan, with self-ticking steps. Also the minimap button. |
 | Key binding | Key Bindings > AddOns > AI Companion > "Open or close the panel". The player picks the key; none is set by default. |
-| `/aic sort debug` | What the bag sort found (bag windows, button) and why it last stopped. Saved in `AICompanionDB.sortDebug` for you to read. |
+| `/aic sort debug` | What the bag sort found (bag windows) and why it last stopped. Saved in `AICompanionDB.sortDebug` for you to read. |
+| `/aic feedback` | Opens a window to report a problem or share an idea; also the Feedback button on the panel. Saved in `feedback`; reaches disk at the next save. |
+| `/aic bug <text>`, `/aic idea <text>` | The same in one line. |
 | `/aic copy` | Text summary the player can paste into chat. |
 | `/aic help` | Command list. |
 
@@ -138,7 +142,7 @@ python3 -I build.py "<SavedVariables file>" plans.json template.html out/index.h
 
 It needs Python with `lupa`. Deliver the page however the player prefers (a published page or a file). Rebuild after each new snapshot.
 
-`plans.json` schema: see `plans.example.json`. Fields per character: `headline`, `headlineShort` (optional, at most 100 characters, written to the player as "you"; the in-game panel shows it, or else the first sentence of `headline`), `next` (steps, **in the order to do them**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order.
+`plans.json` schema: see `plans.example.json`. Fields per character: `headline`, `headlineShort` (optional, at most 100 characters, written to the player as "you"; the in-game panel shows it, or else the first sentence of `headline`), `next` (steps, **in the order to do them**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order. `reported` (top level) maps each `feedback` id you filed to its issue, for example `{"20261116-101500-3": "#34"}`; the game then shows it as sent.
 
 Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (a key in `sources`) and `done`.
 
@@ -152,16 +156,19 @@ Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (
 2. If no snapshot exists, ask the player to log in and type `/aic save`.
 3. Report what you see per character: level, class, location, money, bag space, professions, data age.
 4. List what is not captured yet (bank, profession windows, other characters) and ask for those in-game actions.
-5. Research Forever sources for the character's level and zone, then write `plans.json`, generate the data file, and ask for `/reload`, or for a full restart if `gen_data.py` created the data folder (section 6).
+5. If `feedback` has entries not yet filed, file them (section 9, point 3) and tell the player the issue numbers.
+6. Research Forever sources for the character's level and zone, then write `plans.json`, generate the data file, and ask for `/reload`, or for a full restart if `gen_data.py` created the data folder (section 6).
 
 ## 9. Reporting problems and requests
 
-1. File every add-on bug or feature request as a GitHub issue on `ztarsi/wow-forever-ai-companion`, from the player's account. Issues filed from any other account are ignored. A maintainer agent checks issues every hour and answers each with a pull request or a question on the issue.
+1. File every add-on bug or feature request as a GitHub issue on `ztarsi/wow-forever-ai-companion`, from the player's account. Issues from the owner's account are worked on directly; issues from any other player's account are summarised for the owner, who decides which to work on. A maintainer agent checks issues every hour and answers each with a pull request or a question on the issue.
 2. **No personal data in issues.** The repository is public. No character, realm, account or guild names, no paths containing the user name, and no whole SavedVariables files. Use made-up names in excerpts.
-3. Do not edit the add-on on the player's PC to work around a bug. Report it, and update the add-on once the fix is merged.
+3. **Feedback left in the game.** Every `feedback` entry without an `issue`, and whose id is not yet in `plans.json` `reported`, becomes one issue: title from the text, kind as a label word in the title ("Problem:", "Idea:"), the text, and the add-on version, client version, zone, whether in combat, the last action and any blocked action. Leave out `character`. Then add the id and the issue number to `reported`, generate, and tell the player it was filed. Several entries about the same thing go in one issue. If you cannot create issues (no GitHub access in this assistant), show the player each draft, ready to paste at github.com/ztarsi/wow-forever-ai-companion/issues/new, and add an id to `reported` only once its issue exists.
+4. Do not edit the add-on on the player's PC to work around a bug. Report it, and update the add-on once the fix is merged.
 
 ## Changelog
 
+- 0.13.0 — Feedback from inside the game: `/aic feedback` (or the panel's Feedback button) opens a window to report a problem or share an idea; `/aic bug <text>` and `/aic idea <text>` do it in one line. Entries are kept in `feedback` in the saved file with the add-on version, place and what the add-on last did, reach the companion at the next `/aic save`, and show "Sent as issues" once the companion lists them under `reported` in `plans.json`. The "Sort by advice" button above the bags is withdrawn while the sort is rethought; `/aic sort` still works. `/reload` is enough.
 - 0.12.2 — Key binding: Key Bindings > AddOns > AI Companion > "Open or close the panel". No key by default; the minimap button's tooltip names the key once one is set. Adds `Bindings.xml`: one full game restart.
 - 0.12.1 — The panel's tabs never run past the window's edge: they keep their natural width when all six fit and share the width evenly otherwise, at every allowed size, and the plain fallback buttons do the same. A size saved by an older version is brought within today's limits when the panel opens.
 - 0.12.0 — The panel is a native game window (the approved mockup): the client's titled frame "AI Companion · name" with tabs along the bottom, the headline in a band, "N of M done", the next step highlighted with a "Next" label, an arrow on the right of each step (right when closed, down when open), finished steps greyed under a Done divider, Bags and "I can't see yet" at the end, and the footer "Snapshot today 17:44 · Plan Nov 14". Falls back to a plain window if the client lacks the templates. Needs a full restart.
