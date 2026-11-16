@@ -5,7 +5,7 @@
 
 local ADDON_NAME, ns = ...
 ns = type(ns) == "table" and ns or {}
-local VERSION = "0.12.1"
+local VERSION = "0.13.0"
 local PREFIX = "|cff66ccffAI Companion|r: "
 
 local DB            -- AICompanionDB once loaded
@@ -1644,49 +1644,9 @@ sortStep = function()
     say(("bags sorted by advice in %d moves: sell, auction, mail, bank, use, craft, quest, keep, then the rest."):format(sorter.moves))
 end
 
--- The "Sort by advice" button. It is the add-on's own frame on UIParent, never a child of,
--- anchored to, or written onto the game's bag windows: touching those taints the bag item
--- buttons, and the game then blocks using an item from the bags (issue #15). It follows the
--- bag window by reading its position a few times a second, and nothing runs when bags open.
-local sortButton, followTicker, followed
+-- The bag windows /aic sort debug reports on. The "Sort by advice" button that followed them is
+-- withdrawn while the sort is rethought; /aic sort remains.
 local BAG_WINDOWS = { "ContainerFrameCombinedBags", "ContainerFrame1" }
-
-local function openBagWindow()
-    for _, name in ipairs(BAG_WINDOWS) do
-        local f = _G[name]
-        if type(f) == "table" and type(f.IsShown) == "function" and f:IsShown() then return f, name end
-    end
-end
-
-local function placeSortButton()
-    if not sortButton then return end
-    local f, name = openBagWindow()
-    local right, top = f and f:GetRight(), f and f:GetTop()
-    if not (right and top) then
-        if sortButton:IsShown() then sortButton:Hide() end
-        followed = nil
-        return
-    end
-    local scale = (f:GetEffectiveScale() or 1) / (UIParent:GetEffectiveScale() or 1)
-    sortButton:ClearAllPoints()
-    sortButton:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMLEFT", right * scale - 4, top * scale + 2)
-    if not sortButton:IsShown() then sortButton:Show() end
-    if followed ~= name then followed = name note("sort button over " .. name) end
-end
-
-local function makeSortButton()
-    if sortButton then return end
-    local b = CreateFrame("Button", "AICompanionSortButton", UIParent, "UIPanelButtonTemplate")
-    b:SetSize(120, 20)
-    b:SetFrameStrata("HIGH")
-    b:SetText("Sort by advice")
-    b:SetScript("OnClick", function() local ok, e = pcall(sortStart) if not ok then say("bag sort failed: " .. tostring(e)) end end)
-    b:Hide()
-    sortButton = b
-    if C_Timer and C_Timer.NewTicker then
-        followTicker = C_Timer.NewTicker(0.25, function() pcall(placeSortButton) end)
-    end
-end
 
 sortStart = function()
     if not DB or not charKey then return end
@@ -1713,9 +1673,8 @@ local function sortDebugReport()
         local f = _G[name]
         if type(f) == "table" then found[#found + 1] = name .. ((type(f.IsShown) == "function" and f:IsShown()) and " (open)" or " (closed)") end
     end
-    d.bagWindows, d.buttonOver = found, followed
+    d.bagWindows, d.buttonOver = found, nil
     say("bag windows: " .. (#found > 0 and table.concat(found, ", ") or "none found"))
-    say("sort button: " .. (followed and ("shown above " .. followed) or "hidden (no bag window open)"))
     local blocked = DB.blockedActions
     if type(blocked) == "table" and #blocked > 0 then
         local b = blocked[#blocked]
@@ -1726,6 +1685,176 @@ local function sortDebugReport()
     local run = d.lastRun
     if type(run) == "table" then say("last full sort " .. tostring(run.atText) .. ": " .. tostring(run.moves) .. " moves.") end
     say("saved for your companion at your next /aic save.")
+end
+
+-------------------------------------------------------------------------------
+-- Feedback: report a problem or share an idea from inside the game. The game lets no add-on
+-- reach the internet, so it is kept in the saved file; after /aic save the companion reads it
+-- and files it as a GitHub issue. The plan's `reported` table, in the data add-on, says which
+-- entries were filed, and as which issue.
+-------------------------------------------------------------------------------
+
+local FEEDBACK_KEEP = 30
+local FEEDBACK_MAX_LETTERS = 500
+local feedbackFrame
+local feedbackKind = "problem"
+
+local function plainText(v) if type(v) == "string" and not isSecret(v) then return v end end
+
+local function feedbackList()
+    DB.feedback = type(DB.feedback) == "table" and DB.feedback or {}
+    return DB.feedback
+end
+
+-- Marks each entry the companion has filed with its issue, from the data add-on's plan.
+local function markReported()
+    if not DB then return end
+    local plans = AICompanionPlans
+    local reported = type(plans) == "table" and type(plans.reported) == "table" and plans.reported or {}
+    for _, e in ipairs(feedbackList()) do
+        local issue = type(e) == "table" and reported[e.id]
+        if type(issue) == "string" then e.issue = issue end
+    end
+end
+
+local function addFeedback(kind, text)
+    if not DB then return nil end
+    text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then return nil end
+    if #text > FEEDBACK_MAX_LETTERS then text = text:sub(1, FEEDBACK_MAX_LETTERS) end
+    local list = feedbackList()
+    DB.feedbackCount = (tonumber(DB.feedbackCount) or 0) + 1
+    local blocked = type(DB.blockedActions) == "table" and DB.blockedActions[#DB.blockedActions] or nil
+    local inCombat = (InCombatLockdown and InCombatLockdown()) == true
+    local e = {
+        id = date("%Y%m%d-%H%M%S") .. "-" .. DB.feedbackCount,
+        atText = date("%Y-%m-%d %H:%M:%S"),
+        kind = kind, text = text, character = charKey,
+        addonVersion = VERSION, clientVersion = plainText(try(GetBuildInfo)),
+        zone = plainText(try(GetZoneText)), subZone = plainText(try(GetSubZoneText)),
+        inCombat = inCombat, lastAction = lastAction,
+        lastBlocked = type(blocked) == "table" and blocked.func or nil,
+        lastEventError = plainText(DB.lastEventError),
+    }
+    list[#list + 1] = e
+    while #list > FEEDBACK_KEEP do table.remove(list, 1) end
+    note("feedback " .. e.id)
+    if not inCombat then takeSnapshot("feedback") end
+    say("feedback saved. Type /aic save to send it to your companion, who files it on GitHub.")
+    return e
+end
+
+local function feedbackStatus()
+    local waiting, sent = 0, {}
+    for _, e in ipairs(feedbackList()) do
+        if type(e) == "table" then
+            if e.issue then sent[#sent + 1] = e.issue else waiting = waiting + 1 end
+        end
+    end
+    if waiting == 0 and #sent == 0 then
+        return "Saved here until you type /aic save; your companion files it on GitHub."
+    end
+    local s = ("Waiting for your companion: %d."):format(waiting)
+    if #sent > 0 then
+        local shown = {}
+        for i = math.max(1, #sent - 2), #sent do shown[#shown + 1] = sent[i] end
+        s = s .. (" Sent as issues: %d (%s)."):format(#sent, table.concat(shown, ", "))
+    end
+    return s
+end
+
+local function setFeedbackKind(kind)
+    feedbackKind = kind
+    local f = feedbackFrame
+    if not f then return end
+    for k, b in pairs({ problem = f.problemButton, idea = f.ideaButton }) do
+        if k == kind then b:LockHighlight() else b:UnlockHighlight() end
+    end
+    f.kindLabel:SetText(kind == "idea" and "Your idea:" or "What went wrong? Where were you, what did you do?")
+end
+
+-- The window is the add-on's own frame on UIParent, like the copy window: no game window is touched.
+local function showFeedback(kind)
+    if not DB then return end
+    if not feedbackFrame then
+        local f = CreateFrame("Frame", "AICompanionFeedbackFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+        f:SetSize(480, 280)
+        f:SetPoint("CENTER")
+        f:SetFrameStrata("FULLSCREEN_DIALOG")   -- above the panel, which it opens from
+        if f.SetBackdrop then
+            f:SetBackdrop({
+                bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 },
+            })
+            f:SetBackdropColor(0, 0, 0, 0.92)
+        end
+        f:EnableMouse(true)
+        f:SetMovable(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop", f.StopMovingOrSizing)
+        local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        title:SetPoint("TOPLEFT", 12, -10)
+        title:SetText("AI Companion: report a problem or share an idea")
+        local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+        close:SetPoint("TOPRIGHT", 0, 0)
+        local function button(text, w)
+            local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+            b:SetSize(w, 22)
+            b:SetText(text)
+            return b
+        end
+        f.problemButton = button("Problem", 100)
+        f.problemButton:SetPoint("TOPLEFT", 12, -32)
+        f.problemButton:SetScript("OnClick", function() setFeedbackKind("problem") end)
+        f.ideaButton = button("Idea", 100)
+        f.ideaButton:SetPoint("LEFT", f.problemButton, "RIGHT", 6, 0)
+        f.ideaButton:SetScript("OnClick", function() setFeedbackKind("idea") end)
+        f.kindLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        f.kindLabel:SetPoint("TOPLEFT", 14, -62)
+        local box = CreateFrame("Frame", nil, f)
+        box:SetPoint("TOPLEFT", 12, -78)
+        box:SetPoint("BOTTOMRIGHT", -12, 64)
+        local bg = box:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints(box)
+        bg:SetColorTexture(1, 1, 1, 0.06)
+        local eb = CreateFrame("EditBox", nil, box)
+        eb:SetMultiLine(true)
+        eb:SetMaxLetters(FEEDBACK_MAX_LETTERS)
+        eb:SetFontObject(ChatFontNormal)
+        eb:SetPoint("TOPLEFT", 6, -6)
+        eb:SetPoint("BOTTOMRIGHT", -6, 6)
+        eb:SetAutoFocus(false)
+        eb:SetScript("OnEscapePressed", function() f:Hide() end)
+        f.editBox = eb
+        f.status = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        f.status:SetPoint("BOTTOMLEFT", 14, 42)
+        f.status:SetPoint("RIGHT", f, "RIGHT", -14, 0)
+        f.status:SetJustifyH("LEFT")
+        f.status:SetWordWrap(true)
+        f.saveButton = button("Save", 90)
+        f.saveButton:SetPoint("BOTTOMRIGHT", -12, 12)
+        f.saveButton:SetScript("OnClick", function()
+            if addFeedback(feedbackKind, eb:GetText()) then
+                eb:SetText("")
+                f:Hide()
+            else
+                say("write what happened first, then Save.")
+            end
+        end)
+        f.cancelButton = button("Cancel", 90)
+        f.cancelButton:SetPoint("RIGHT", f.saveButton, "LEFT", -6, 0)
+        f.cancelButton:SetScript("OnClick", function() eb:SetText("") f:Hide() end)
+        -- Escape closes it, like the game's own windows.
+        if type(UISpecialFrames) == "table" then table.insert(UISpecialFrames, "AICompanionFeedbackFrame") end
+        feedbackFrame = f
+    end
+    markReported()
+    setFeedbackKind(kind or feedbackKind)
+    feedbackFrame.status:SetText(feedbackStatus())
+    feedbackFrame:Show()
+    feedbackFrame.editBox:SetFocus()
 end
 
 local function countErrors(snap)
@@ -1768,6 +1897,14 @@ local function handleSlash(msg)
         DB.questions[#DB.questions + 1] = { askedAtText = date("%Y-%m-%d %H:%M:%S"), character = charKey, text = rest }
         takeSnapshot("ask")
         say("question noted. Type /aic save to send it with a fresh snapshot.")
+    elseif cmd == "feedback" or cmd == "report" or cmd == "bug" or cmd == "idea" then
+        local kind = (cmd == "bug" and "problem") or (cmd == "idea" and "idea") or nil
+        if rest == "" then
+            local ok, err = pcall(showFeedback, kind)
+            if not ok then say("could not open the feedback window: " .. tostring(err)) end
+        else
+            addFeedback(kind or "feedback", rest)
+        end
     elseif cmd == "ah" or cmd == "auction" then
         local days = rest:lower():match("^age%s+(%d+)$")
         if days then
@@ -1792,6 +1929,8 @@ local function handleSlash(msg)
         print("  /aic save       take a snapshot and reload so it is written to disk")
         print("  /aic copy       show a text summary you can copy and paste")
         print("  /aic ask <q>    note a question for your companion")
+        print("  /aic feedback   report a problem or share an idea (opens a window; also on the panel)")
+        print("  /aic bug <text> report a problem in one line; /aic idea <text> for an idea")
         print("  /aic ah         at an auctioneer: check prices for your bags, bank and shopping list")
         print("  /aic ah age <n> with Auctionator: use its prices seen within n days (default 5)")
         print("  /aic sort       group your bags by advice: sell, auction, mail, bank, use, craft, quest, keep")
@@ -1806,6 +1945,7 @@ ns.core = {
     charKey = function() return charKey end,
     adviceFor = adviceFor, ruleFor = ruleFor, say = say, try = try, isSecret = isSecret,
     takeSnapshot = function(reason) return takeSnapshot(reason) end,
+    showFeedback = function(kind) return showFeedback(kind) end,
     ADVICE_LABEL = ADVICE_LABEL,
 }
 
@@ -1844,10 +1984,10 @@ end
 
 function handlers.PLAYER_LOGIN()
     if not DB then return end
-    pcall(makeSortButton)
     local name = UnitName("player") or "Unknown"
     local realm = try(GetRealmName) or "Unknown"
     charKey = name .. "@" .. realm
+    pcall(markReported)
     C_Timer.After(5, function()
         if type(DB.apiProbe) ~= "table" or DB.apiProbe.version ~= 3 then
             local ok, res = pcall(probeAPI)
