@@ -368,7 +368,7 @@ Do this:
 {research}
 
 Finish with two to four plain sentences for the player: what changed in the advice, and what to do in game (usually /reload).""".format(
-        guide=shell_path(os.path.join(TOOLS, "CLAUDE_GUIDE.md")), changes="\n".join("- " + c["text"] for c in pending),
+        guide=shell_path(os.path.join(TOOLS, "SKILL.md")), changes="\n".join("- " + c["text"] for c in pending),
         plans=shell_path(cfg.plans), sv=shell_path(cfg.saved_variables), py=py,
         gendata=shell_path(os.path.join(TOOLS, "gen_data.py")), data=shell_path(cfg.data_lua), research=research)
     return text, bool(web)
