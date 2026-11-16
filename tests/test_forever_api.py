@@ -55,6 +55,7 @@ def game_calls(src):
     """Game functions the source calls: C_X.Y anywhere, and capitalised globals called or passed to try()."""
     code = strip_strings_and_comments(src)
     defined = set(re.findall(r"\blocal\s+function\s+([A-Za-z_]\w*)", code))
+    defined |= set(re.findall(r"\bfunction\s+([A-Za-z_]\w*)\s*\(", code))   # the add-on's own global functions
     defined |= set(re.findall(r"\blocal\s+([A-Za-z_][\w,\s]*?)\s*=", code) and
                    [n.strip() for m in re.findall(r"\blocal\s+([A-Za-z_][\w,\s]*?)\s*=", code) for n in m.split(",")])
     names = set(re.findall(r"\b(C_\w+\.\w+)\b", code))

@@ -8,6 +8,7 @@ reload, logout and login exactly as the game would write and read it.
 import copy
 import os
 import re
+import xml.etree.ElementTree as ET
 
 from lupa import lua51
 
@@ -20,7 +21,8 @@ DECLARED_GLOBALS = {
     "AICompanionDB", "AICompanionRules", "AICompanionShopping", "AICompanionAdvice",
     "SLASH_AICOMPANION1", "SLASH_AICOMPANION2", "AICompanionCopyFrame", "AICompanionCopyScroll",
     "AICompanionAuctionButton", "AICompanionPlans", "AICompanionPanel", "AICompanionPanelScroll",
-    "AICompanionMinimapButton",
+    "AICompanionMinimapButton", "BINDING_HEADER_AICOMPANION", "BINDING_NAME_AICOMPANION_TOGGLE_PANEL",
+    "AICompanion_TogglePanel",
 }
 
 
@@ -88,6 +90,11 @@ class Game:
                 if addon == "AICompanion_Data" and fname == "AICompanion_Data.lua" and self.data_source is not None:
                     src = self.data_source
                 self.M.loadFile(addon, "AddOns/%s/%s" % (addon, fname), src, ns)
+            # The client reads Bindings.xml from the add-on's folder by itself (it is not in the .toc).
+            bindings = os.path.join(ADDONS, addon, "Bindings.xml")
+            if os.path.exists(bindings):
+                for b in ET.parse(bindings).getroot().iter("Binding"):
+                    self.M.addBinding(b.get("name"), b.get("header") or "", b.get("category") or "", (b.text or "").strip())
             for name in saved_names:
                 if name in self.saved:
                     self.lua.execute(self.saved[name])
@@ -118,6 +125,10 @@ class Game:
         self.world[key] = value
         w = self.lua.globals().WORLD
         w[key] = self.lua.table_from(value, recursive=True) if isinstance(value, (dict, list)) else value
+
+    def press_binding(self, name):
+        """Press the key bound to a Key Bindings entry (a key press is a hardware event)."""
+        self.M.pressBinding(name)
 
     def hover(self, item_id):
         """Show an item tooltip; return the lines the add-on added, as (left, right) pairs."""

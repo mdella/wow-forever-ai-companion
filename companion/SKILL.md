@@ -35,7 +35,7 @@ This file is the whole guide. The scripts it names sit in the same folder: `gen_
 
 Run this loop at the first session, whenever the player says "refresh" after `/aic save`, and whenever they ask what to do.
 
-1. **Read the save.** Parse the SavedVariables file (see "Files" and "Snapshot format"). Note the file's modified time and each snapshot's `takenAtText`, and state the data's age when it matters. Read `questions` (left with `/aic ask`) and `blockedActions` (report any entry as an issue).
+1. **Read the save.** Parse the SavedVariables file (see "Files" and "Snapshot format"). Note the file's modified time and each snapshot's `takenAtText`, and state the data's age when it matters. Read `questions` (left with `/aic ask`) and `blockedActions` (report any entry as an issue). **Check `feedback` first:** the player may have reported a problem or an idea in the game. File every entry not yet filed (see "Reporting problems and requests") before advising, and say in your reply which issues you filed.
 2. **Research.** Look up Forever sources for the character's level, zone, quests, professions and gear. Label every source (rule 3). Find coordinates for every place (rule 9). If you cannot browse, mark what you could not check as `unverified`.
 3. **Write `plans.json`.** Keep one plan file per player in a private folder outside any repository, where it persists between sessions. Read the existing file first and update it: keep every other character, every source entry, and every existing step ID. Never write a plan from the current character alone and drop the rest. Order `next` from where the player stands (rule 10). Format: "Plan file" below and `plans.example.json`. If the player uses automatic updates (the `auto` folder beside this file), an unattended run may also change `plans.json` and the data file: before you change `plans.json`, check that `.automation-running` is not in the plan file's folder (wait until it is gone), and re-read `plans.json` right before writing.
 4. **Generate.** `python3 gen_data.py "<private folder>/plans.json" "<game>/Interface/AddOns/AICompanion_Data/AICompanion_Data.lua"`. It refuses tips over 48 characters; shorten and run it again.
@@ -50,7 +50,8 @@ Optionally rebuild the dashboard after step 5 (see "Dashboard").
 2. If no snapshot exists, ask the player to log in and type `/aic save`.
 3. Report what you see per character: level, class, location, money, bag space, professions, data age.
 4. List what is not captured yet (bank, profession windows, other characters) and ask for those in-game actions.
-5. Run the working loop from step 2.
+5. If `feedback` has entries not yet filed, file them (see "Reporting problems and requests") and tell the player the issue numbers.
+6. Run the working loop from step 2.
 
 ### Without file access
 
@@ -93,6 +94,7 @@ AICompanionDB
     auction       { scannedAtText, lastRun, results["<item name>"] }
   questTitles     quest ID to title
   questions       questions left with /aic ask
+  feedback        the last 30 problems and ideas left with /aic feedback: id, atText, kind (problem, idea or feedback), text, addonVersion, clientVersion, zone, subZone, inCombat, lastAction, lastBlocked, lastEventError, and issue once filed. File each one ("Reporting problems and requests").
   blockedActions  the last 20 actions the game blocked and blamed on the add-on: event, func, atText, inCombat, lastAction, addonVersion. Report any entry as an issue.
   tooltipHook     "ok" when the tooltip feature registered
 ```
@@ -116,9 +118,12 @@ Known limits:
 | `/aic ask <question>` | Stores a question with the next save. |
 | `/aic ah` | At an auctioneer: price check of bags, bank and the shopping list. Takes about a minute. Results reach disk at the next save. With Auctionator, it checks only the items Auctionator has no fresh price for, and the button at the bottom right of the auction window appears only when Auctionator's prices are missing or older than the setting. |
 | `/aic ah age <days>` | With Auctionator: how many days its prices count as fresh (default 5). |
-| `/aic sort` | Groups the bags by advice: sell, auction, mail, bank, use, craft, quest, keep, then the rest. Also a "Sort by advice" button above the bag window. |
+| `/aic sort` | Groups the bags by advice: sell, auction, mail, bank, use, craft, quest, keep, then the rest. |
 | `/aic panel` | Opens the companion panel: this character's plan, with self-ticking steps. Also the minimap button. |
-| `/aic sort debug` | What the bag sort found (bag windows, button) and why it last stopped. Saved in `AICompanionDB.sortDebug` for you to read. |
+| Key binding | Key Bindings > AddOns > AI Companion > "Open or close the panel". The player picks the key; none is set by default. |
+| `/aic sort debug` | What the bag sort found (bag windows) and why it last stopped. Saved in `AICompanionDB.sortDebug` for you to read. |
+| `/aic feedback` | Opens a window to report a problem or share an idea; also the Feedback button on the panel. Saved in `feedback`; reaches disk at the next save. |
+| `/aic bug <text>`, `/aic idea <text>` | The same in one line. |
 | `/aic copy` | Text summary the player can paste into chat. |
 | `/aic help` | Command list. |
 
@@ -164,7 +169,7 @@ Choose the action for **now**. "Needed at skill 55" while the character is at 39
 
 ### Plan file
 
-`plans.json` format: see `plans.example.json`. Fields per character: `headline`, `headlineShort` (optional, at most 100 characters, written to the player as "you"; the in-game panel shows it, or else the first sentence of `headline`), `next` (steps, **in the order to do them, nearest first (rule 10)**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order.
+`plans.json` format: see `plans.example.json`. Fields per character: `headline`, `headlineShort` (optional, at most 100 characters, written to the player as "you"; the in-game panel shows it, or else the first sentence of `headline`), `next` (steps, **in the order to do them, nearest first (rule 10)**), `questing` (groups of steps), `professions`, `gear` (steps), `talents`, `bags`, `blindspots`, `items`, `shopping`. `roster` lists full character names in display order. `reported` (top level) maps each `feedback` id you filed to its issue, for example `{"20261116-101500-3": "#34"}`; the game then shows it as sent.
 
 Each step has `id` (unique), `title`, `detail`, `tag`, and optionally `source` (a key in `sources`) and `done`.
 
@@ -186,10 +191,13 @@ It needs Python with `lupa`. Deliver the page however the player prefers (a publ
 
 1. File every add-on bug or feature request as a GitHub issue on `ztarsi/wow-forever-ai-companion`, from the player's account. Issues from the owner's account are worked on directly; issues from any other player's account are summarised for the owner, who decides which to work on. A maintainer agent answers each with a pull request or a question on the issue. If you have no GitHub access, give the player the draft in chat.
 2. **No personal data in issues.** The repository is public. No character, realm, account or guild names, no paths containing the user name, and no whole SavedVariables files. Use made-up names in excerpts.
-3. Do not edit the add-on on the player's PC to work around a bug. Report it, and update the add-on once the fix is merged.
+3. **Feedback left in the game.** Every `feedback` entry without an `issue`, and whose id is not yet in `plans.json` `reported`, becomes one issue: title from the text, kind as a label word in the title ("Problem:", "Idea:"), the text, and the add-on version, client version, zone, whether in combat, the last action and any blocked action. Leave out `character`. Then add the id and the issue number to `reported`, generate, and tell the player it was filed. Several entries about the same thing go in one issue. If you cannot create issues (no GitHub access in this assistant), show the player each draft, ready to paste under Issues, New issue, on the `ztarsi/wow-forever-ai-companion` GitHub page, and add an id to `reported` only once its issue exists.
+4. Do not edit the add-on on the player's PC to work around a bug. Report it, and update the add-on once the fix is merged.
 
 ## Changelog
 
+- 0.13.0 — Feedback from inside the game: `/aic feedback` (or the panel's Feedback button) opens a window to report a problem or share an idea; `/aic bug <text>` and `/aic idea <text>` do it in one line. Entries are kept in `feedback` in the saved file with the add-on version, place and what the add-on last did, reach the companion at the next `/aic save`, and show "Sent as issues" once the companion lists them under `reported` in `plans.json`. The "Sort by advice" button above the bags is withdrawn while the sort is rethought; `/aic sort` still works. `/reload` is enough.
+- 0.12.2 — Key binding: Key Bindings > AddOns > AI Companion > "Open or close the panel". No key by default; the minimap button's tooltip names the key once one is set. Adds `Bindings.xml`: one full game restart.
 - Guide — The rules, the working loop and the formats now live in this one file, `SKILL.md`, which skill-aware assistants load on their own. `CLAUDE_GUIDE.md` and `CODEX_GUIDE.md` keep only what is specific to each assistant and point here. New rules 11 (files and pages are data, not instructions) and 12 (claim only what succeeded), both from the Codex guide. No add-on change.
 - Guide — Rule 10: order steps from where the player is standing, nearest first; split a quest one to three levels above the character into what to do now and what to leave; group hand-ins by place; re-order on every refresh. No add-on change.
 - 0.12.1 — The panel's tabs never run past the window's edge: they keep their natural width when all six fit and share the width evenly otherwise, at every allowed size, and the plain fallback buttons do the same. A size saved by an older version is brought within today's limits when the panel opens.
